@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package deployer.upload;
+
+service UploadService {
+  rpc CloneRepo (CloneRequest) returns (CloneResponse);
+  rpc UploadArtifacts (UploadRequest) returns (UploadResponse);
+}
+
+message CloneRequest {
+  string repo_url = 1;
+  string branch = 2;
+  string target_path = 3;
+}
+
+message CloneResponse {
+  bool success = 1;
+  string error_message = 2;
+  string clone_path = 3;
+}
+
+message UploadRequest {
+  string project_id = 1;
+  string deployment_id = 2;
+  string source_directory = 3;
+}
+
+message UploadResponse {
+  bool success = 1;
+  string error_message = 2;
+  string s3_prefix = 3;
+}

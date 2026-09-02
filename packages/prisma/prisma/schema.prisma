@@ -1,0 +1,82 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  projects     Project[]
+
+  @@map("users")
+}
+
+model Project {
+  id                  String       @id @default(uuid())
+  userId              String       @map("user_id")
+  name                String
+  repoUrl             String       @map("repo_url")
+  branch              String       @default("main")
+  subdomain           String       @unique
+  currentDeploymentId String?      @map("current_deployment_id")
+  envVarsEncrypted    Json?        @map("env_vars_encrypted")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+
+  user                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deployments         Deployment[] @relation("ProjectDeployments")
+
+  @@map("projects")
+}
+
+model Deployment {
+  id           String           @id @default(uuid())
+  projectId    String           @map("project_id")
+  status       DeploymentStatus @default(QUEUED)
+  commitHash   String?          @map("commit_hash")
+  triggerType  TriggerType      @default(MANUAL) @map("trigger_type")
+  s3Prefix     String?          @map("s3_prefix")
+  startedAt    DateTime?        @map("started_at")
+  completedAt  DateTime?        @map("completed_at")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  project      Project          @relation("ProjectDeployments", fields: [projectId], references: [id], onDelete: Cascade)
+  logs         DeploymentLog[]
+
+  @@map("deployments")
+}
+
+model DeploymentLog {
+  id           BigInt     @id @default(autoincrement())
+  deploymentId String     @map("deployment_id")
+  stream       String     // "stdout" | "stderr"
+  line         String
+  timestamp    DateTime   @default(now())
+
+  deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@index([deploymentId, id])
+  @@map("deployment_logs")
+}
+
+enum DeploymentStatus {
+  QUEUED
+  CLONING
+  BUILDING
+  UPLOADING
+  DEPLOYED
+  FAILED
+}
+
+enum TriggerType {
+  MANUAL
+  WEBHOOK
+  ROLLBACK
+}

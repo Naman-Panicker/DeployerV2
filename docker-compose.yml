@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: deployer-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-deployer_db}
+    # Ephemeral dev database - no volume mounts as per specification
+
+  redis:
+    image: redis:7-alpine
+    container_name: deployer-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"

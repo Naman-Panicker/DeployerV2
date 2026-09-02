@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package deployer.build;
+
+service BuildService {
+  rpc TriggerBuild (TriggerBuildRequest) returns (TriggerBuildResponse);
+  rpc GetBuildStatus (GetBuildStatusRequest) returns (GetBuildStatusResponse);
+}
+
+message TriggerBuildRequest {
+  string project_id = 1;
+  string deployment_id = 2;
+  string repo_url = 3;
+  string branch = 4;
+  map<string, string> env_vars = 5;
+}
+
+message TriggerBuildResponse {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message GetBuildStatusRequest {
+  string deployment_id = 1;
+}
+
+message GetBuildStatusResponse {
+  string deployment_id = 1;
+  string status = 2;
+}

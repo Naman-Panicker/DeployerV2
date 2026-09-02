@@ -1,0 +1,20 @@
+{
+  "name": "deployer",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "prisma:generate": "prisma generate --schema=packages/prisma/prisma/schema.prisma",
+    "prisma:push": "prisma db push --schema=packages/prisma/prisma/schema.prisma",
+    "proto:codegen": "npm run codegen --workspace=packages/proto",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "infra:logs": "docker compose logs -f"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
