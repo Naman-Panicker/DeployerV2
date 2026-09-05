@@ -6,6 +6,7 @@
     "services/*"
   ],
   "scripts": {
+    "build": "npm run build --workspaces --if-present",
     "prisma:generate": "prisma generate --schema=packages/prisma/prisma/schema.prisma",
     "prisma:push": "prisma db push --schema=packages/prisma/prisma/schema.prisma",
     "proto:codegen": "npm run codegen --workspace=packages/proto",
