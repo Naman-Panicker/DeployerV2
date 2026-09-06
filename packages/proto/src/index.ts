@@ -22,4 +22,6 @@ export {
   CloneResponse,
   UploadRequest,
   UploadResponse,
+  CopyArtifactsRequest,
+  CopyArtifactsResponse,
 } from './generated/upload.js';

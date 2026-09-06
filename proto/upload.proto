@@ -5,6 +5,7 @@ package deployer.upload;
 service UploadService {
   rpc CloneRepo (CloneRequest) returns (CloneResponse);
   rpc UploadArtifacts (UploadRequest) returns (UploadResponse);
+  rpc CopyArtifacts (CopyArtifactsRequest) returns (CopyArtifactsResponse);
 }
 
 message CloneRequest {
@@ -30,3 +31,15 @@ message UploadResponse {
   string error_message = 2;
   string s3_prefix = 3;
 }
+
+message CopyArtifactsRequest {
+  string source_prefix = 1;
+  string destination_prefix = 2;
+}
+
+message CopyArtifactsResponse {
+  bool success = 1;
+  string error_message = 2;
+  int32 copied_count = 3;
+}
+
