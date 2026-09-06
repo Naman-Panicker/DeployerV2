@@ -1,7 +1,7 @@
 import { Server, ServerCredentials } from '@grpc/grpc-js';
 import { UploadServiceService, type UploadServiceServer } from '@deployer/proto';
 import { handleCloneRepo } from './handlers/clone.handler.js';
-import { handleUploadArtifacts } from './handlers/upload.handler.js';
+import { handleUploadArtifacts, handleCopyArtifacts } from './handlers/upload.handler.js';
 import { initializeBucket } from './services/s3.service.js';
 
 export function createGrpcServer(): Server {
@@ -10,6 +10,7 @@ export function createGrpcServer(): Server {
   const implementation: UploadServiceServer = {
     cloneRepo: handleCloneRepo,
     uploadArtifacts: handleUploadArtifacts,
+    copyArtifacts: handleCopyArtifacts,
   };
 
   server.addService(UploadServiceService, implementation);
@@ -35,7 +36,7 @@ export async function startServer(port: number): Promise<Server> {
 
       console.log(`========================================================`);
       console.log(`[Upload Service] gRPC server running on 0.0.0.0:${boundPort}`);
-      console.log(`[Upload Service] RPCs available: CloneRepo, UploadArtifacts`);
+      console.log(`[Upload Service] RPCs available: CloneRepo, UploadArtifacts, CopyArtifacts`);
       console.log(`========================================================`);
 
       resolve(server);

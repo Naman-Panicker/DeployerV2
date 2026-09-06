@@ -3,7 +3,10 @@ import {
   HeadBucketCommand,
   CreateBucketCommand,
   PutObjectCommand,
+  ListObjectsV2Command,
+  CopyObjectCommand,
 } from '@aws-sdk/client-s3';
+
 import { env } from '@deployer/config';
 import fs from 'node:fs';
 import pLimit from 'p-limit';
@@ -217,3 +220,106 @@ export async function uploadArtifactsToS3(
     };
   }
 }
+
+export interface CopyResult {
+  success: boolean;
+  copiedCount: number;
+  errorMessage?: string;
+}
+
+/**
+ * Copies artifacts from one S3 prefix to another within the same bucket.
+ * Primarily used for rollback (e.g., __history/<proj>/<deploy>/ -> __outputs/<proj>/).
+ */
+export async function copyArtifactsInS3(
+  sourcePrefix: string,
+  destinationPrefix: string
+): Promise<CopyResult> {
+  const bucketName = env.S3_BUCKET_NAME || 'deployer-artifacts';
+  const client = getS3Client();
+
+  const isPlaceholderCredentials =
+    !env.AWS_ACCESS_KEY_ID ||
+    env.AWS_ACCESS_KEY_ID === 'your-access-key-id' ||
+    !env.AWS_SECRET_ACCESS_KEY ||
+    env.AWS_SECRET_ACCESS_KEY === 'your-secret-access-key';
+
+  if (isPlaceholderCredentials) {
+    console.warn(
+      `[Upload Service] AWS credentials are placeholder/mock. Simulating successful copy from '${sourcePrefix}' to '${destinationPrefix}'.`
+    );
+    return {
+      success: true,
+      copiedCount: 1,
+    };
+  }
+
+  try {
+    const normalizedSource = sourcePrefix.endsWith('/') ? sourcePrefix : `${sourcePrefix}/`;
+    const normalizedDest = destinationPrefix.endsWith('/') ? destinationPrefix : `${destinationPrefix}/`;
+
+    let continuationToken: string | undefined;
+    let totalCopied = 0;
+    const limit = pLimit(MAX_CONCURRENT_UPLOADS);
+
+    do {
+      const listCommand = new ListObjectsV2Command({
+        Bucket: bucketName,
+        Prefix: normalizedSource,
+        ContinuationToken: continuationToken,
+      });
+
+      const listResponse = await client.send(listCommand);
+      const objects = listResponse.Contents || [];
+
+      if (objects.length === 0 && totalCopied === 0) {
+        return {
+          success: false,
+          copiedCount: 0,
+          errorMessage: `No artifacts found under source prefix: ${sourcePrefix}`,
+        };
+      }
+
+      const copyTasks = objects
+        .filter((obj) => obj.Key && obj.Key !== normalizedSource)
+        .map((obj) =>
+          limit(async () => {
+            const key = obj.Key!;
+            const relativeKey = key.slice(normalizedSource.length);
+            const destinationKey = `${normalizedDest}${relativeKey}`;
+            const safeCopySource = `${bucketName}/${key.split('/').map(encodeURIComponent).join('/')}`;
+
+            await client.send(
+              new CopyObjectCommand({
+                Bucket: bucketName,
+                CopySource: safeCopySource,
+                Key: destinationKey,
+              })
+            );
+            totalCopied++;
+          })
+        );
+
+      await Promise.all(copyTasks);
+      continuationToken = listResponse.NextContinuationToken;
+    } while (continuationToken);
+
+    console.log(
+      `[Upload Service] Successfully copied ${totalCopied} artifacts from ${sourcePrefix} to ${destinationPrefix}`
+    );
+
+    return {
+      success: true,
+      copiedCount: totalCopied,
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[Upload Service] S3 copy error: ${errorMsg}`);
+    return {
+      success: false,
+      copiedCount: 0,
+      errorMessage: errorMsg,
+    };
+  }
+}
+

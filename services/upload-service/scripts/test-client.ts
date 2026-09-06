@@ -52,9 +52,25 @@ async function runTestClient() {
     );
   });
 
+  // 3. Test CopyArtifacts (with missing args check)
+  console.log('\n--- Test 3: CopyArtifacts RPC Validation ---');
+  await new Promise<void>((resolve) => {
+    client.copyArtifacts(
+      {
+        sourcePrefix: '',
+        destinationPrefix: '',
+      },
+      (err, res) => {
+        console.log('[Test 3 Validation Result]:', res || err);
+        resolve();
+      }
+    );
+  });
+
   console.log('\n[Upload Service Test Client] Tests completed.');
   client.close();
 }
+
 
 runTestClient().catch((err) => {
   console.error('[Upload Service Test Client] Error:', err);
