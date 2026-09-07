@@ -99,18 +99,64 @@ export async function triggerRollback(
       status: DeploymentStatus.QUEUED,
       triggerType: TriggerType.ROLLBACK,
       commitHash: targetDeployment.commitHash,
+      startedAt: new Date(),
     },
   });
 
-  // TODO [Phase 6]: S3 copy logic from __history/<projectId>/<targetDeploymentId>/ to __outputs/<projectId>/
+  const sourcePrefix = `__history/${project.id}/${targetDeployment.id}/`;
+  const destinationPrefix = `__outputs/${project.id}/`;
+
   console.log(
-    `[API Gateway] Rollback deployment created (${rollbackDeployment.id}) targeting previous deployment ${targetDeployment.id}`
-  );
-  console.log(
-    `[API Gateway] (Stub) S3 artifact copy from history will be wired in Phase 6`
+    `[API Gateway] Initiating rollback (${rollbackDeployment.id}) to target deployment ${targetDeployment.id} (copying ${sourcePrefix} -> ${destinationPrefix})`
   );
 
-  return rollbackDeployment;
+  try {
+    const { copyArtifactsViaUploadService } = await import('../clients/upload.client.js');
+    const copyResult = await copyArtifactsViaUploadService(sourcePrefix, destinationPrefix);
+
+    if (!copyResult.success) {
+      const errorMsg = copyResult.errorMessage || 'Failed to restore snapshot artifacts';
+      await prisma.deployment.update({
+        where: { id: rollbackDeployment.id },
+        data: {
+          status: DeploymentStatus.FAILED,
+          completedAt: new Date(),
+        },
+      });
+      throw new Error(`Rollback failed: ${errorMsg}`);
+    }
+
+    const completedDeployment = await prisma.deployment.update({
+      where: { id: rollbackDeployment.id },
+      data: {
+        status: DeploymentStatus.DEPLOYED,
+        s3Prefix: destinationPrefix,
+        completedAt: new Date(),
+      },
+    });
+
+    await prisma.project.update({
+      where: { id: project.id },
+      data: {
+        currentDeploymentId: rollbackDeployment.id,
+      },
+    });
+
+    console.log(
+      `[API Gateway] Rollback completed successfully: deployment ${completedDeployment.id} is now DEPLOYED`
+    );
+
+    return completedDeployment;
+  } catch (err) {
+    await prisma.deployment.update({
+      where: { id: rollbackDeployment.id },
+      data: {
+        status: DeploymentStatus.FAILED,
+        completedAt: new Date(),
+      },
+    });
+    throw err;
+  }
 }
 
 /**
