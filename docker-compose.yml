@@ -1,4 +1,5 @@
 services:
+  # ── Infrastructure ────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: deployer-postgres
@@ -9,7 +10,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-deployer_db}
-    # Ephemeral dev database - no volume mounts as per specification
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-deployer_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -17,3 +22,140 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Database Initialization ───────────────────────────────
+  prisma-init:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: deployer-prisma-init
+    command: ["npm", "run", "prisma:push"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-deployer_db}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ── Application Services ──────────────────────────────────
+  upload-service:
+    build:
+      context: .
+      dockerfile: services/upload-service/Dockerfile
+    container_name: deployer-upload-service
+    restart: unless-stopped
+    ports:
+      - "9002:9002"
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-deployer-artifacts}
+      UPLOAD_SERVICE_PORT: 9002
+
+  build-server:
+    build:
+      context: .
+      dockerfile: services/build-server/Dockerfile
+    container_name: deployer-build-server
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "9001:9001"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-deployer_db}
+      REDIS_URL: redis://redis:6379
+      BUILD_SERVER_PORT: 9001
+      UPLOAD_SERVICE_HOST: upload-service
+      UPLOAD_SERVICE_PORT: 9002
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      prisma-init:
+        condition: service_completed_successfully
+      upload-service:
+        condition: service_started
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: deployer-api-gateway
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-deployer_db}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-deployer-dev-secret-change-in-prod-32-chars-long}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      API_GATEWAY_PORT: 9000
+      BUILD_SERVER_HOST: build-server
+      BUILD_SERVER_PORT: 9001
+      UPLOAD_SERVICE_HOST: upload-service
+      UPLOAD_SERVICE_PORT: 9002
+      LOG_SERVICE_URL: http://log-service:9003
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      prisma-init:
+        condition: service_completed_successfully
+      build-server:
+        condition: service_started
+      upload-service:
+        condition: service_started
+
+  log-service:
+    build:
+      context: .
+      dockerfile: services/log-service/Dockerfile
+    container_name: deployer-log-service
+    restart: unless-stopped
+    ports:
+      - "9003:9003"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-deployer_db}
+      REDIS_URL: redis://redis:6379
+      LOG_SERVICE_PORT: 9003
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      prisma-init:
+        condition: service_completed_successfully
+
+  reverse-proxy:
+    build:
+      context: .
+      dockerfile: services/reverse-proxy/Dockerfile
+    container_name: deployer-reverse-proxy
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-deployer_db}
+      REDIS_URL: redis://redis:6379
+      REVERSE_PROXY_PORT: 8080
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-deployer-artifacts}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      prisma-init:
+        condition: service_completed_successfully

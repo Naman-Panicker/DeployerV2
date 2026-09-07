@@ -11,8 +11,9 @@ export function setUploadClient(newClient: InstanceType<typeof UploadServiceClie
 
 function getClient(): InstanceType<typeof UploadServiceClient> {
   if (!client) {
+    const host = process.env.UPLOAD_SERVICE_HOST || env.UPLOAD_SERVICE_HOST || 'localhost';
     const port = process.env.UPLOAD_SERVICE_PORT || env.UPLOAD_SERVICE_PORT || 9002;
-    const address = `localhost:${port}`;
+    const address = `${host}:${port}`;
     client = new UploadServiceClient(address, credentials.createInsecure());
     console.log(`[Upload Client] Connected to Upload Service at ${address}`);
   }

@@ -9,6 +9,8 @@ COPY proto/ ./proto/
 COPY services/build-server/ ./services/build-server/
 
 RUN npm install
+RUN npm run prisma:generate
+RUN npm run build --workspace=@deployer/config --workspace=@deployer/proto --workspace=@deployer/prisma
 
 EXPOSE 9001
 

@@ -12,7 +12,9 @@ let client: InstanceType<typeof BuildServiceClient> | null = null;
 
 function getClient(): InstanceType<typeof BuildServiceClient> {
   if (!client) {
-    const address = `localhost:${env.BUILD_SERVER_PORT || 9001}`;
+    const host = env.BUILD_SERVER_HOST || 'localhost';
+    const port = env.BUILD_SERVER_PORT || 9001;
+    const address = `${host}:${port}`;
     client = new BuildServiceClient(address, credentials.createInsecure());
     console.log(`[Build Client] Connected to Build Server at ${address}`);
   }
