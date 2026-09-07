@@ -1,6 +1,35 @@
+import crypto from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
+import { env } from '@deployer/config';
 import { githubWebhookSchema } from '../utils/validation.js';
 import { triggerWebhookDeploy } from '../services/deployment.service.js';
+
+export function verifyGitHubSignature(req: Request): boolean {
+  const secret = env.GITHUB_WEBHOOK_SECRET;
+  if (!secret) {
+    // If no secret configured, allow (dev mode / optional verification)
+    return true;
+  }
+
+  const signature = req.headers['x-hub-signature-256'] as string | undefined;
+  if (!signature) {
+    return false;
+  }
+
+  const rawBody: Buffer = (req as any).rawBody || Buffer.from(JSON.stringify(req.body));
+  const expectedSignature =
+    'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+
+  if (signature.length !== expectedSignature.length) {
+    return false;
+  }
+
+  try {
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+  } catch {
+    return false;
+  }
+}
 
 export async function githubWebhookHandler(
   req: Request,
@@ -8,6 +37,11 @@ export async function githubWebhookHandler(
   next: NextFunction
 ): Promise<void> {
   try {
+    if (!verifyGitHubSignature(req)) {
+      res.status(401).json({ error: 'Invalid or missing GitHub webhook signature' });
+      return;
+    }
+
     const payload = githubWebhookSchema.parse(req.body);
 
     const repoUrl = payload.repository?.clone_url || payload.repository?.html_url;

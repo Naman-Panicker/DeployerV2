@@ -11,6 +11,8 @@ import {
   getEnvVarsHandler,
   deployProjectHandler,
   rollbackProjectHandler,
+  listDeploymentsHandler,
+  getDeploymentLogsHandler,
 } from '../controllers/project.controller.js';
 
 export const projectRouter = Router();
@@ -28,6 +30,11 @@ projectRouter.delete('/:id', deleteProjectHandler);
 projectRouter.post('/:id/env', setEnvVarsHandler);
 projectRouter.get('/:id/env', getEnvVarsHandler);
 
+// Deployments & Logs
+projectRouter.get('/:id/deployments', listDeploymentsHandler);
+projectRouter.get('/:id/deployments/:deploymentId/logs', getDeploymentLogsHandler);
+
 // Deploy & Rollback triggers (rate limited)
 projectRouter.post('/:id/deploy', deployLimiter, deployProjectHandler);
 projectRouter.post('/:id/rollback', deployLimiter, rollbackProjectHandler);
+

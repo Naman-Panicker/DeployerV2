@@ -190,7 +190,143 @@ async function runApiTests() {
       throw new Error('Rollback should fail for non-DEPLOYED status');
     }
 
-    console.log('\n✅ ALL API GATEWAY TESTS PASSED SUCCESSFULLY!\n');
+    // 12. List Deployments
+    console.log('\n--- Test 12: List Deployments (GET /api/projects/:id/deployments) ---');
+    const listDeployRes = await fetch(`${BASE_URL}/api/projects/${project.id}/deployments`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const listDeployJson = await listDeployRes.json();
+    console.log('List deployments count:', listDeployJson.deployments?.length);
+    if (listDeployRes.status !== 200 || !Array.isArray(listDeployJson.deployments) || listDeployJson.deployments.length === 0) {
+      throw new Error('Failed to list deployments');
+    }
+
+    // 13. Log Proxy endpoint
+    console.log('\n--- Test 13: Log Proxy (GET /api/projects/:id/deployments/:deploymentId/logs) ---');
+    const logProxyRes = await fetch(
+      `${BASE_URL}/api/projects/${project.id}/deployments/${deployJson.deployment.id}/logs`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
+    console.log('Log Proxy status:', logProxyRes.status);
+    // Since log service may not be running locally right now, expect 502 or 200, but NOT 404/500
+    if (logProxyRes.status !== 502 && logProxyRes.status !== 200) {
+      throw new Error(`Unexpected log proxy response status: ${logProxyRes.status}`);
+    }
+
+    // 14. Webhook Signature Verification
+    console.log('\n--- Test 14: Webhook Signature Verification (HMAC-SHA256) ---');
+    const crypto = await import('node:crypto');
+    const { env } = await import('@deployer/config');
+    const testSecret = 'test-webhook-secret-12345';
+    // Temporarily configure secret for testing
+    (env as any).GITHUB_WEBHOOK_SECRET = testSecret;
+
+    const webhookPayload = JSON.stringify({
+      ref: 'refs/heads/master',
+      repository: {
+        clone_url: 'https://github.com/octocat/Hello-World.git',
+        default_branch: 'master',
+      },
+      head_commit: {
+        id: '1234567890abcdef',
+        message: 'Signed commit',
+      },
+    });
+
+    // 14a. Without signature -> should be rejected (401)
+    const unsignedRes = await fetch(`${BASE_URL}/api/webhook/github`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: webhookPayload,
+    });
+    console.log('Unsigned webhook rejection status:', unsignedRes.status);
+    if (unsignedRes.status !== 401) {
+      throw new Error('Unsigned webhook should be rejected with 401');
+    }
+
+    // 14b. With invalid signature -> should be rejected (401)
+    const badSigRes = await fetch(`${BASE_URL}/api/webhook/github`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-hub-signature-256': 'sha256=badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadb',
+      },
+      body: webhookPayload,
+    });
+    console.log('Bad signature rejection status:', badSigRes.status);
+    if (badSigRes.status !== 401) {
+      throw new Error('Bad signature should be rejected with 401');
+    }
+
+    // 14c. With valid HMAC signature -> should be accepted (202)
+    const validHmac =
+      'sha256=' +
+      crypto.createHmac('sha256', testSecret).update(Buffer.from(webhookPayload)).digest('hex');
+
+    const validSigRes = await fetch(`${BASE_URL}/api/webhook/github`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-hub-signature-256': validHmac,
+      },
+      body: webhookPayload,
+    });
+    console.log('Valid signature acceptance status:', validSigRes.status);
+    if (validSigRes.status !== 202) {
+      throw new Error('Valid signature should be accepted with 202');
+    }
+
+    // Reset secret
+    (env as any).GITHUB_WEBHOOK_SECRET = '';
+
+    // 15. Full Rollback Execution with Artifact Copy
+    console.log('\n--- Test 15: Successful Rollback with S3 Artifact Copy ---');
+    const { prisma, DeploymentStatus } = await import('@deployer/prisma');
+    const { setUploadClient } = await import('../src/clients/upload.client.js');
+
+    // Mark previous deployment as DEPLOYED
+    await prisma.deployment.update({
+      where: { id: deployJson.deployment.id },
+      data: { status: DeploymentStatus.DEPLOYED },
+    });
+
+    // Mock UploadServiceClient for CopyArtifacts RPC
+    setUploadClient({
+      copyArtifacts: (req: any, cb: any) => {
+        console.log(`[Mock Upload Client] copyArtifacts called: ${req.sourcePrefix} -> ${req.destinationPrefix}`);
+        cb(null, { success: true, copiedCount: 4, errorMessage: '' });
+      },
+    } as any);
+
+    const execRollbackRes = await fetch(`${BASE_URL}/api/projects/${project.id}/rollback`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        deploymentId: deployJson.deployment.id,
+      }),
+    });
+    const execRollbackJson = await execRollbackRes.json();
+    console.log('Rollback execution response:', execRollbackRes.status, execRollbackJson.message);
+    if (execRollbackRes.status !== 202 || execRollbackJson.deployment?.status !== 'DEPLOYED') {
+      throw new Error(`Rollback execution failed: ${JSON.stringify(execRollbackJson)}`);
+    }
+
+    // Verify project currentDeploymentId was updated
+    const updatedProj = await prisma.project.findUnique({ where: { id: project.id } });
+    console.log('Project currentDeploymentId:', updatedProj?.currentDeploymentId);
+    if (updatedProj?.currentDeploymentId !== execRollbackJson.deployment.id) {
+      throw new Error('Project currentDeploymentId was not updated to rollback deployment');
+    }
+
+    // Cleanup mock
+    setUploadClient(null);
+
+    console.log('\n✅ ALL API GATEWAY & PHASE 6 INTEGRATION TESTS PASSED SUCCESSFULLY!\n');
   } finally {
     server.close();
   }

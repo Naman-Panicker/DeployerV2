@@ -16,6 +16,9 @@ import {
   getProjectEnvVars,
 } from '../services/project.service.js';
 import { triggerDeploy, triggerRollback } from '../services/deployment.service.js';
+import { prisma } from '@deployer/prisma';
+import { env } from '@deployer/config';
+
 
 function getParamId(param: string | string[] | undefined): string {
   if (Array.isArray(param)) {
@@ -216,3 +219,93 @@ export async function rollbackProjectHandler(
     next(err);
   }
 }
+
+export async function listDeploymentsHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.user!.userId;
+    const projectId = getParamId(req.params.id);
+
+    const project = await prisma.project.findFirst({
+      where: { id: projectId, userId },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found or unauthorized' });
+      return;
+    }
+
+    const deployments = await prisma.deployment.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        projectId: true,
+        status: true,
+        commitHash: true,
+        triggerType: true,
+        s3Prefix: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+      },
+    });
+
+    res.status(200).json({ deployments });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getDeploymentLogsHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = req.user!.userId;
+    const projectId = getParamId(req.params.id);
+    const deploymentId = getParamId(req.params.deploymentId);
+
+    // 1. Verify project belongs to user
+    const project = await prisma.project.findFirst({
+      where: { id: projectId, userId },
+    });
+
+    if (!project) {
+      res.status(404).json({ error: 'Project not found or unauthorized' });
+      return;
+    }
+
+    // 2. Verify deployment exists and belongs to this project
+    const deployment = await prisma.deployment.findFirst({
+      where: { id: deploymentId, projectId },
+    });
+
+    if (!deployment) {
+      res.status(404).json({ error: 'Deployment not found for this project' });
+      return;
+    }
+
+    // 3. Proxy request to Log Service
+    const logServiceUrl = `${env.LOG_SERVICE_URL}/api/logs/${deploymentId}`;
+    try {
+      const logRes = await fetch(logServiceUrl);
+      if (!logRes.ok) {
+        res.status(logRes.status).json({ error: `Log service returned status ${logRes.status}` });
+        return;
+      }
+      const data = await logRes.json();
+      res.status(200).json(data);
+    } catch (fetchErr) {
+      console.error(`[API Gateway] Failed to contact Log Service at ${logServiceUrl}:`, fetchErr);
+      res.status(502).json({ error: 'Log Service unavailable' });
+    }
+  } catch (err) {
+    next(err);
+  }
+}
+
