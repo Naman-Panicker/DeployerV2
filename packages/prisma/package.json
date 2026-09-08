@@ -12,16 +12,23 @@
       "default": "./src/index.ts"
     }
   },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
   "scripts": {
     "generate": "prisma generate",
     "db:push": "prisma db push",
+    "seed": "prisma db seed",
     "build": "tsc"
   },
   "dependencies": {
-    "@prisma/client": "^6.4.1"
+    "@prisma/client": "^6.4.1",
+    "bcryptjs": "^3.0.2"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "prisma": "^6.4.1",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }
 }
