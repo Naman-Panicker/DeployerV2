@@ -12,5 +12,6 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist"
-  }
+  },
+  "exclude": ["**/*.test.ts", "**/*.spec.ts"]
 }

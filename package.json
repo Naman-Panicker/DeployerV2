@@ -7,6 +7,10 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "tsx scripts/e2e-smoke-test.ts",
+    "seed": "tsx packages/prisma/prisma/seed.ts",
     "prisma:generate": "prisma generate --schema=packages/prisma/prisma/schema.prisma",
     "prisma:push": "prisma db push --schema=packages/prisma/prisma/schema.prisma",
     "proto:codegen": "npm run codegen --workspace=packages/proto",
@@ -16,6 +20,7 @@
   },
   "devDependencies": {
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^5.0.0"
   }
 }
