@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { prisma, DeploymentStatus } from '@deployer/prisma';
 import { cloneViaUploadService, uploadViaUploadService } from '../clients/upload.client.js';
 import { detectBuildConfig } from './detect.service.js';
-import { runBuildInContainer } from './docker.service.js';
+import { runBuildInContainer, BUILD_IMAGE } from './docker.service.js';
 import { publishLog, publishBuildComplete } from './redis.service.js';
 
 export interface BuildJob {
@@ -90,7 +90,7 @@ async function processJob(job: BuildJob): Promise<void> {
 
     // ── 3. BUILDING ─────────────────────────────────────────────────────────
     await updateDeploymentStatus(deploymentId, DeploymentStatus.BUILDING);
-    await publishLog(deploymentId, 'stdout', `Starting build container (image: node:18-alpine)...`);
+    await publishLog(deploymentId, 'stdout', `Starting build container (image: ${BUILD_IMAGE})...`);
 
     const buildResult = await runBuildInContainer({
       deploymentId,

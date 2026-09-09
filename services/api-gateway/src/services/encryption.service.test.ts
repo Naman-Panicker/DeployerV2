@@ -4,7 +4,9 @@ import {
   decrypt,
   encryptEnvVars,
   decryptEnvVars,
+  maskSecret,
 } from './encryption.service.js';
+
 
 describe('encryption.service', () => {
   describe('encrypt and decrypt', () => {
@@ -101,4 +103,25 @@ describe('encryption.service', () => {
       expect(decrypted.CORRUPT_KEY).toBe('[DECRYPTION_FAILED]');
     });
   });
+
+  describe('maskSecret', () => {
+    it('returns empty string for falsy/empty values', () => {
+      expect(maskSecret('')).toBe('');
+    });
+
+    it('masks values with 4 or fewer characters completely', () => {
+      expect(maskSecret('1234')).toBe('••••');
+      expect(maskSecret('ab')).toBe('••••');
+    });
+
+    it('masks long secrets retaining only the last 4 characters', () => {
+      expect(maskSecret('super-secret-key-123')).toBe('••••••••-123');
+      expect(maskSecret('postgresql://user:pass@localhost:5432')).toBe('••••••••5432');
+    });
+
+    it('preserves [DECRYPTION_FAILED] marker without masking', () => {
+      expect(maskSecret('[DECRYPTION_FAILED]')).toBe('[DECRYPTION_FAILED]');
+    });
+  });
 });
+

@@ -79,3 +79,21 @@ export function decryptEnvVars(encryptedEnvVars: Record<string, string>): Record
   }
   return decrypted;
 }
+
+/**
+ * Masks a secret string showing only the last 4 characters if long enough.
+ */
+export function maskSecret(val: string): string {
+  if (val === '[DECRYPTION_FAILED]') {
+    return '[DECRYPTION_FAILED]';
+  }
+  if (!val) {
+    return '';
+  }
+  if (val.length <= 4) {
+    return '••••';
+  }
+  return `••••••••${val.slice(-4)}`;
+}
+
+

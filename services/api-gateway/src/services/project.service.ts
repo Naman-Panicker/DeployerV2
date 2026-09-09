@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { prisma, type Project, type Prisma } from '@deployer/prisma';
-import { encryptEnvVars, decryptEnvVars } from './encryption.service.js';
+import { encryptEnvVars, decryptEnvVars, maskSecret } from './encryption.service.js';
+
 
 /**
  * Slugifies a project name for use in subdomains.
@@ -67,7 +68,16 @@ export async function listUserProjects(userId: string) {
   return prisma.project.findMany({
     where: { userId },
     orderBy: { createdAt: 'desc' },
-    include: {
+    select: {
+      id: true,
+      userId: true,
+      name: true,
+      repoUrl: true,
+      branch: true,
+      subdomain: true,
+      currentDeploymentId: true,
+      createdAt: true,
+      updatedAt: true,
       deployments: {
         orderBy: { createdAt: 'desc' },
         take: 1,
@@ -79,7 +89,16 @@ export async function listUserProjects(userId: string) {
 export async function getProjectById(userId: string, projectId: string) {
   const project = await prisma.project.findFirst({
     where: { id: projectId, userId },
-    include: {
+    select: {
+      id: true,
+      userId: true,
+      name: true,
+      repoUrl: true,
+      branch: true,
+      subdomain: true,
+      currentDeploymentId: true,
+      createdAt: true,
+      updatedAt: true,
       deployments: {
         orderBy: { createdAt: 'desc' },
         take: 10,
@@ -152,10 +171,15 @@ export async function setProjectEnvVars(
   return { success: true, count: Object.keys(envVars).length };
 }
 
+export interface EnvVarPreview {
+  key: string;
+  preview: string;
+}
+
 export async function getProjectEnvVars(
   userId: string,
   projectId: string
-): Promise<Record<string, string> | null> {
+): Promise<EnvVarPreview[] | null> {
   const project = await prisma.project.findFirst({
     where: { id: projectId, userId },
   });
@@ -165,8 +189,14 @@ export async function getProjectEnvVars(
   }
 
   if (!project.envVarsEncrypted || typeof project.envVarsEncrypted !== 'object') {
-    return {};
+    return [];
   }
 
-  return decryptEnvVars(project.envVarsEncrypted as Record<string, string>);
+  const decrypted = decryptEnvVars(project.envVarsEncrypted as Record<string, string>);
+
+  return Object.entries(decrypted).map(([key, val]) => ({
+    key,
+    preview: maskSecret(val),
+  }));
 }
+

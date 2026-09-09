@@ -123,19 +123,24 @@ async function runApiTests() {
     console.log('Set Env Vars status:', setEnvRes.status, setEnvJson.message);
     if (setEnvRes.status !== 200) throw new Error('Set env vars failed');
 
-    // 8. Retrieve and Decrypt Environment Variables
-    console.log('\n--- Test 8: Get Decrypted Env Vars ---');
+    // 8. Retrieve Masked Environment Variables (Option C Preview)
+    console.log('\n--- Test 8: Get Masked Env Vars ---');
     const getEnvRes = await fetch(`${BASE_URL}/api/projects/${project.id}/env`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const getEnvJson = await getEnvRes.json();
-    console.log('Get Env Vars keys:', Object.keys(getEnvJson.envVars || {}));
+    console.log('Get Env Vars count:', getEnvJson.envVars?.length);
+    const apiKeyEntry = getEnvJson.envVars?.find((e: { key: string }) => e.key === 'API_KEY');
+    const nodeEnvEntry = getEnvJson.envVars?.find((e: { key: string }) => e.key === 'NODE_ENV');
     if (
-      getEnvJson.envVars?.API_KEY !== 'super-secret-key-123' ||
-      getEnvJson.envVars?.NODE_ENV !== 'production'
+      !apiKeyEntry ||
+      apiKeyEntry.preview !== '••••••••-123' ||
+      !nodeEnvEntry ||
+      nodeEnvEntry.preview !== '••••••••tion'
     ) {
-      throw new Error('Decrypted env vars do not match original plaintext values');
+      throw new Error('Masked env vars do not match expected preview format');
     }
+
 
     // 9. Trigger Manual Deployment
     console.log('\n--- Test 9: Trigger Deployment ---');

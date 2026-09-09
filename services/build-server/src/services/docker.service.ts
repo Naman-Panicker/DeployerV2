@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 import { publishLog } from './redis.service.js';
 import { createScrubber } from './scrubber.service.js';
 
-const BUILD_IMAGE = 'node:18-alpine';
+export const BUILD_IMAGE = 'node:20-alpine';
 const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });

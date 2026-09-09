@@ -247,7 +247,6 @@ export async function listDeploymentsHandler(
         status: true,
         commitHash: true,
         triggerType: true,
-        s3Prefix: true,
         startedAt: true,
         completedAt: true,
         createdAt: true,
@@ -290,8 +289,14 @@ export async function getDeploymentLogsHandler(
       return;
     }
 
-    // 3. Proxy request to Log Service
-    const logServiceUrl = `${env.LOG_SERVICE_URL}/api/logs/${deploymentId}`;
+    // 3. Proxy request to Log Service (forward query parameters like ?after=)
+    const logUrl = new URL(`${env.LOG_SERVICE_URL}/api/logs/${deploymentId}`);
+    for (const [key, value] of Object.entries(req.query)) {
+      if (typeof value === 'string' && value.trim().length > 0) {
+        logUrl.searchParams.set(key, value.trim());
+      }
+    }
+    const logServiceUrl = logUrl.toString();
     try {
       const logRes = await fetch(logServiceUrl);
       if (!logRes.ok) {

@@ -96,10 +96,10 @@ async function runTests() {
   // ─────────────────────────────────────────────────────────────────────────
   // TEST 3: Docker Image Auto-Pull
   // ─────────────────────────────────────────────────────────────────────────
-  console.log('\n--- Test 3: Docker Image Auto-Pull (node:18-alpine) ---');
+  console.log('\n--- Test 3: Docker Image Auto-Pull (node:20-alpine) ---');
   try {
     await ensureBuildImage();
-    assert(true, 'Docker node:18-alpine image verified / pulled successfully');
+    assert(true, 'Docker node:20-alpine image verified / pulled successfully');
   } catch (dockerErr: any) {
     assert(false, `Docker ensureBuildImage failed: ${dockerErr.message}`);
   }
