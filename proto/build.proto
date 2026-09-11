@@ -5,6 +5,7 @@ package deployer.build;
 service BuildService {
   rpc TriggerBuild (TriggerBuildRequest) returns (TriggerBuildResponse);
   rpc GetBuildStatus (GetBuildStatusRequest) returns (GetBuildStatusResponse);
+  rpc CopyArtifacts (CopyArtifactsRequest) returns (CopyArtifactsResponse);
 }
 
 message TriggerBuildRequest {
@@ -28,3 +29,15 @@ message GetBuildStatusResponse {
   string deployment_id = 1;
   string status = 2;
 }
+
+message CopyArtifactsRequest {
+  string source_prefix = 1;
+  string destination_prefix = 2;
+}
+
+message CopyArtifactsResponse {
+  bool success = 1;
+  string error_message = 2;
+  int32 copied_count = 3;
+}
+

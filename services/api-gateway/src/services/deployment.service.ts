@@ -111,8 +111,8 @@ export async function triggerRollback(
   );
 
   try {
-    const { copyArtifactsViaUploadService } = await import('../clients/upload.client.js');
-    const copyResult = await copyArtifactsViaUploadService(sourcePrefix, destinationPrefix);
+    const { copyArtifactsViaBuildServer } = await import('../clients/copy.client.js');
+    const copyResult = await copyArtifactsViaBuildServer(sourcePrefix, destinationPrefix);
 
     if (!copyResult.success) {
       const errorMsg = copyResult.errorMessage || 'Failed to restore snapshot artifacts';

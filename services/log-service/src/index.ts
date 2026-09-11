@@ -1,6 +1,7 @@
 import { env } from '@deployer/config';
 import { createApp } from './app.js';
 import { startSubscriber, stopSubscriber } from './services/redis-subscriber.service.js';
+import { stopPublisher } from './services/redis-publisher.service.js';
 import { startFlushInterval, stopFlushInterval, flushAll } from './services/log-buffer.service.js';
 
 async function main() {
@@ -39,6 +40,7 @@ async function main() {
     }
 
     await stopSubscriber();
+    await stopPublisher();
 
     server.close(() => {
       console.log('[Log Service] HTTP server stopped cleanly.');

@@ -289,7 +289,7 @@ async function runApiTests() {
     // 15. Full Rollback Execution with Artifact Copy
     console.log('\n--- Test 15: Successful Rollback with S3 Artifact Copy ---');
     const { prisma, DeploymentStatus } = await import('@deployer/prisma');
-    const { setUploadClient } = await import('../src/clients/upload.client.js');
+    const { setCopyClient } = await import('../src/clients/copy.client.js');
 
     // Mark previous deployment as DEPLOYED
     await prisma.deployment.update({
@@ -297,10 +297,10 @@ async function runApiTests() {
       data: { status: DeploymentStatus.DEPLOYED },
     });
 
-    // Mock UploadServiceClient for CopyArtifacts RPC
-    setUploadClient({
+    // Mock BuildServiceClient for CopyArtifacts RPC
+    setCopyClient({
       copyArtifacts: (req: any, cb: any) => {
-        console.log(`[Mock Upload Client] copyArtifacts called: ${req.sourcePrefix} -> ${req.destinationPrefix}`);
+        console.log(`[Mock Build Client] copyArtifacts called: ${req.sourcePrefix} -> ${req.destinationPrefix}`);
         cb(null, { success: true, copiedCount: 4, errorMessage: '' });
       },
     } as any);
@@ -329,7 +329,7 @@ async function runApiTests() {
     }
 
     // Cleanup mock
-    setUploadClient(null);
+    setCopyClient(null);
 
     console.log('\n✅ ALL API GATEWAY & PHASE 6 INTEGRATION TESTS PASSED SUCCESSFULLY!\n');
   } finally {

@@ -1,9 +1,6 @@
-import fs from 'node:fs/promises';
 import { prisma, DeploymentStatus } from '@deployer/prisma';
-import { cloneViaUploadService, uploadViaUploadService } from '../clients/upload.client.js';
-import { detectBuildConfig } from './detect.service.js';
-import { runBuildInContainer, BUILD_IMAGE } from './docker.service.js';
-import { publishLog, publishBuildComplete } from './redis.service.js';
+import { generatePresignedForms } from './s3.service.js';
+import { runBuildInContainer } from './docker.service.js';
 
 export interface BuildJob {
   projectId: string;
@@ -63,96 +60,80 @@ async function updateDeploymentStatus(
   console.log(`[Deployment ${deploymentId}] Status updated to ${status}`);
 }
 
+async function notifyLogService(
+  logServiceUrl: string,
+  deploymentId: string,
+  stream: 'stdout' | 'stderr' | 'system',
+  line: string
+): Promise<void> {
+  try {
+    await fetch(`${logServiceUrl}/api/logs/ingest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deploymentId,
+        stream,
+        line,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+  } catch {
+    // Ignore logging failures to avoid masking underlying build errors
+  }
+}
+
 async function processJob(job: BuildJob): Promise<void> {
   const { projectId, deploymentId, repoUrl, branch, envVars } = job;
-  let clonePath: string | null = null;
+  const logServiceUrl = process.env.LOG_SERVICE_URL || 'http://log-service:9003';
 
   try {
-    // ── 1. CLONING ──────────────────────────────────────────────────────────
-    await updateDeploymentStatus(deploymentId, DeploymentStatus.CLONING, { startedAt: new Date() });
-    await publishLog(deploymentId, 'stdout', `Initiating clone: ${repoUrl} (branch: ${branch})...`);
+    // 1. Transition directly to BUILDING
+    await updateDeploymentStatus(deploymentId, DeploymentStatus.BUILDING, { startedAt: new Date() });
 
-    const cloneResponse = await cloneViaUploadService(repoUrl, branch);
-    if (!cloneResponse.success) {
-      throw new Error(`Git clone failed: ${cloneResponse.errorMessage}`);
-    }
+    // 2. Generate presigned S3 POST forms (outputs + history prefixes)
+    console.log(`[Queue] Generating presigned S3 POST forms for deployment ${deploymentId}...`);
+    const presignedForms = await generatePresignedForms(projectId, deploymentId);
 
-    clonePath = cloneResponse.clonePath;
-    await publishLog(deploymentId, 'stdout', `Repository cloned successfully to ${clonePath}`);
-
-    // ── 2. DETECT BUILD CONFIG ──────────────────────────────────────────────
-    const buildConfig = await detectBuildConfig(clonePath);
-    await publishLog(
-      deploymentId,
-      'stdout',
-      `Detected framework: ${buildConfig.framework} | Command: "${buildConfig.buildCommand}"`
-    );
-
-    // ── 3. BUILDING ─────────────────────────────────────────────────────────
-    await updateDeploymentStatus(deploymentId, DeploymentStatus.BUILDING);
-    await publishLog(deploymentId, 'stdout', `Starting build container (image: ${BUILD_IMAGE})...`);
-
+    // 3. Run isolated build container (cloning, building, and S3 upload happen inside container)
+    console.log(`[Queue] Launching build container for deployment ${deploymentId}...`);
     const buildResult = await runBuildInContainer({
+      projectId,
       deploymentId,
-      clonePath,
-      buildCommand: buildConfig.buildCommand,
+      repoUrl,
+      branch,
       envVars,
+      presignedForms,
+      logServiceUrl,
     });
 
     if (!buildResult.success) {
-      throw new Error(`Build failed: ${buildResult.error || 'Non-zero exit code'}`);
+      throw new Error(`Build container failed: ${buildResult.error || 'Non-zero exit code'}`);
     }
 
-    const outputPath = buildConfig.resolveOutputPath(clonePath);
-    await publishLog(deploymentId, 'stdout', `Build succeeded. Artifact directory: ${outputPath}`);
-
-    // ── 4. UPLOADING ────────────────────────────────────────────────────────
-    await updateDeploymentStatus(deploymentId, DeploymentStatus.UPLOADING);
-    await publishLog(deploymentId, 'stdout', `Uploading build artifacts to S3 storage...`);
-
-    const uploadResponse = await uploadViaUploadService(projectId, deploymentId, outputPath);
-    if (!uploadResponse.success) {
-      throw new Error(`Artifact upload failed: ${uploadResponse.errorMessage}`);
-    }
-
-    await publishLog(deploymentId, 'stdout', `Artifacts uploaded to S3: ${uploadResponse.s3Prefix}`);
-
-    // ── 5. DEPLOYED ─────────────────────────────────────────────────────────
+    // 4. Mark deployment as DEPLOYED
+    const s3Prefix = presignedForms.outputs.prefix;
     await updateDeploymentStatus(deploymentId, DeploymentStatus.DEPLOYED, {
-      s3Prefix: uploadResponse.s3Prefix,
+      s3Prefix,
       completedAt: new Date(),
     });
 
-    // Update the project's currentDeploymentId pointer
+    // Update project currentDeploymentId pointer
     await prisma.project.update({
       where: { id: projectId },
       data: { currentDeploymentId: deploymentId },
     });
 
-    await publishLog(
-      deploymentId,
-      'stdout',
-      `✅ Deployment ${deploymentId} successfully completed and deployed!`
-    );
-    await publishBuildComplete(deploymentId);
+    console.log(`[Queue] Deployment ${deploymentId} successfully completed and deployed!`);
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     console.error(`[Queue] Build failed for deployment ${deploymentId}: ${errorMsg}`);
 
-    await publishLog(deploymentId, 'stderr', `❌ Build failed: ${errorMsg}`);
+    // Notify log service in case container died prematurely
+    await notifyLogService(logServiceUrl, deploymentId, 'stderr', `❌ Build failed: ${errorMsg}`);
+    await notifyLogService(logServiceUrl, deploymentId, 'system', 'BUILD_COMPLETE');
+
     await updateDeploymentStatus(deploymentId, DeploymentStatus.FAILED, {
       completedAt: new Date(),
     });
-    await publishBuildComplete(deploymentId);
-  } finally {
-    // ── 6. CLEANUP ──────────────────────────────────────────────────────────
-    if (clonePath) {
-      try {
-        await fs.rm(clonePath, { recursive: true, force: true });
-        console.log(`[Queue] Cleaned up temporary clone directory: ${clonePath}`);
-      } catch (cleanupErr) {
-        console.warn(`[Queue] Failed to remove clone directory ${clonePath}:`, cleanupErr);
-      }
-    }
   }
 }

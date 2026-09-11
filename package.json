@@ -1,11 +1,15 @@
 {
   "name": "deployer",
   "private": true,
+  "type": "module",
   "workspaces": [
     "packages/*",
     "services/*"
   ],
   "scripts": {
+    "dev": "concurrently -k -p \"{name}\" -c \"magenta,yellow,green,blue\" -n \"build,log,api,proxy\" \"npm run dev -w services/build-server\" \"npm run dev -w services/log-service\" \"npm run dev -w services/api-gateway\" \"npm run dev -w services/reverse-proxy\"",
+    "dev:start": "docker compose up -d --wait postgres redis && npm run prisma:push && npm run dev",
+    "dev:stop": "docker compose down",
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -14,11 +18,12 @@
     "prisma:generate": "prisma generate --schema=packages/prisma/prisma/schema.prisma",
     "prisma:push": "prisma db push --schema=packages/prisma/prisma/schema.prisma",
     "proto:codegen": "npm run codegen --workspace=packages/proto",
-    "infra:up": "docker compose up -d",
+    "infra:up": "docker compose up -d postgres redis",
     "infra:down": "docker compose down",
     "infra:logs": "docker compose logs -f"
   },
   "devDependencies": {
+    "concurrently": "^10.0.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^5.0.0"

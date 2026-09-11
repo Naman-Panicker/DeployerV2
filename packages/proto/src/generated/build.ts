@@ -48,6 +48,17 @@ export interface GetBuildStatusResponse {
   status: string;
 }
 
+export interface CopyArtifactsRequest {
+  sourcePrefix: string;
+  destinationPrefix: string;
+}
+
+export interface CopyArtifactsResponse {
+  success: boolean;
+  errorMessage: string;
+  copiedCount: number;
+}
+
 function createBaseTriggerBuildRequest(): TriggerBuildRequest {
   return { projectId: "", deploymentId: "", repoUrl: "", branch: "", envVars: {} };
 }
@@ -572,6 +583,208 @@ export const GetBuildStatusResponse: MessageFns<GetBuildStatusResponse> = {
   },
 };
 
+function createBaseCopyArtifactsRequest(): CopyArtifactsRequest {
+  return { sourcePrefix: "", destinationPrefix: "" };
+}
+
+export const CopyArtifactsRequest: MessageFns<CopyArtifactsRequest> = {
+  encode(message: CopyArtifactsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sourcePrefix !== "") {
+      writer.uint32(10).string(message.sourcePrefix);
+    }
+    if (message.destinationPrefix !== "") {
+      writer.uint32(18).string(message.destinationPrefix);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CopyArtifactsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseCopyArtifactsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.sourcePrefix = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.destinationPrefix = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): CopyArtifactsRequest {
+    return {
+      sourcePrefix: isSet(object.sourcePrefix)
+        ? globalThis.String(object.sourcePrefix)
+        : isSet(object.source_prefix)
+        ? globalThis.String(object.source_prefix)
+        : "",
+      destinationPrefix: isSet(object.destinationPrefix)
+        ? globalThis.String(object.destinationPrefix)
+        : isSet(object.destination_prefix)
+        ? globalThis.String(object.destination_prefix)
+        : "",
+    };
+  },
+
+  toJSON(message: CopyArtifactsRequest): unknown {
+    const obj: any = {};
+    if (message.sourcePrefix !== "") {
+      obj.sourcePrefix = message.sourcePrefix;
+    }
+    if (message.destinationPrefix !== "") {
+      obj.destinationPrefix = message.destinationPrefix;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CopyArtifactsRequest>, I>>(base?: I): CopyArtifactsRequest {
+    return CopyArtifactsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CopyArtifactsRequest>, I>>(object: I): CopyArtifactsRequest {
+    const message = createBaseCopyArtifactsRequest();
+    message.sourcePrefix = object.sourcePrefix ?? "";
+    message.destinationPrefix = object.destinationPrefix ?? "";
+    return message;
+  },
+};
+
+function createBaseCopyArtifactsResponse(): CopyArtifactsResponse {
+  return { success: false, errorMessage: "", copiedCount: 0 };
+}
+
+export const CopyArtifactsResponse: MessageFns<CopyArtifactsResponse> = {
+  encode(message: CopyArtifactsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.success !== false) {
+      writer.uint32(8).bool(message.success);
+    }
+    if (message.errorMessage !== "") {
+      writer.uint32(18).string(message.errorMessage);
+    }
+    if (message.copiedCount !== 0) {
+      writer.uint32(24).int32(message.copiedCount);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): CopyArtifactsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseCopyArtifactsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 8) {
+              break;
+            }
+
+            message.success = reader.bool();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.errorMessage = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.copiedCount = reader.int32();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): CopyArtifactsResponse {
+    return {
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
+      errorMessage: isSet(object.errorMessage)
+        ? globalThis.String(object.errorMessage)
+        : isSet(object.error_message)
+        ? globalThis.String(object.error_message)
+        : "",
+      copiedCount: isSet(object.copiedCount)
+        ? globalThis.Number(object.copiedCount)
+        : isSet(object.copied_count)
+        ? globalThis.Number(object.copied_count)
+        : 0,
+    };
+  },
+
+  toJSON(message: CopyArtifactsResponse): unknown {
+    const obj: any = {};
+    if (message.success !== false) {
+      obj.success = message.success;
+    }
+    if (message.errorMessage !== "") {
+      obj.errorMessage = message.errorMessage;
+    }
+    if (message.copiedCount !== 0) {
+      obj.copiedCount = Math.round(message.copiedCount);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<CopyArtifactsResponse>, I>>(base?: I): CopyArtifactsResponse {
+    return CopyArtifactsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<CopyArtifactsResponse>, I>>(object: I): CopyArtifactsResponse {
+    const message = createBaseCopyArtifactsResponse();
+    message.success = object.success ?? false;
+    message.errorMessage = object.errorMessage ?? "";
+    message.copiedCount = object.copiedCount ?? 0;
+    return message;
+  },
+};
+
 export type BuildServiceService = typeof BuildServiceService;
 export const BuildServiceService = {
   triggerBuild: {
@@ -595,11 +808,22 @@ export const BuildServiceService = {
       Buffer.from(GetBuildStatusResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): GetBuildStatusResponse => GetBuildStatusResponse.decode(value),
   },
+  copyArtifacts: {
+    path: "/deployer.build.BuildService/CopyArtifacts" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: CopyArtifactsRequest): Buffer => Buffer.from(CopyArtifactsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): CopyArtifactsRequest => CopyArtifactsRequest.decode(value),
+    responseSerialize: (value: CopyArtifactsResponse): Buffer =>
+      Buffer.from(CopyArtifactsResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): CopyArtifactsResponse => CopyArtifactsResponse.decode(value),
+  },
 } as const;
 
 export interface BuildServiceServer extends UntypedServiceImplementation {
   triggerBuild: handleUnaryCall<TriggerBuildRequest, TriggerBuildResponse>;
   getBuildStatus: handleUnaryCall<GetBuildStatusRequest, GetBuildStatusResponse>;
+  copyArtifacts: handleUnaryCall<CopyArtifactsRequest, CopyArtifactsResponse>;
 }
 
 export interface BuildServiceClient extends Client {
@@ -632,6 +856,21 @@ export interface BuildServiceClient extends Client {
     metadata: Metadata,
     options: Partial<CallOptions>,
     callback: (error: ServiceError | null, response: GetBuildStatusResponse) => void,
+  ): ClientUnaryCall;
+  copyArtifacts(
+    request: CopyArtifactsRequest,
+    callback: (error: ServiceError | null, response: CopyArtifactsResponse) => void,
+  ): ClientUnaryCall;
+  copyArtifacts(
+    request: CopyArtifactsRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: CopyArtifactsResponse) => void,
+  ): ClientUnaryCall;
+  copyArtifacts(
+    request: CopyArtifactsRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: CopyArtifactsResponse) => void,
   ): ClientUnaryCall;
 }
 

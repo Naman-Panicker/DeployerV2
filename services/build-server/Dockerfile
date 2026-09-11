@@ -2,6 +2,9 @@ FROM node:22-alpine
 
 WORKDIR /app
 
+RUN apk add --no-cache docker-cli
+
+
 COPY package*.json ./
 COPY tsconfig.base.json ./
 COPY packages/ ./packages/
