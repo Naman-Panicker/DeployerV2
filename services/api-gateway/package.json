@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@deployer/config": "*",
+    "@deployer/crypto": "*",
     "@deployer/prisma": "*",
     "@deployer/proto": "*",
     "@grpc/grpc-js": "^1.12.5",
