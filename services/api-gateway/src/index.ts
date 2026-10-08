@@ -1,5 +1,6 @@
 import { env } from '@deployer/config';
 import { createApp } from './app.js';
+import { closeBuildQueues } from './clients/build-queue.client.js';
 
 const app = createApp();
 
@@ -13,8 +14,11 @@ const server = app.listen(env.API_GATEWAY_PORT, () => {
 // Graceful shutdown
 const shutdown = () => {
   console.log('[API Gateway] Shutting down gracefully...');
-  server.close(() => {
+  server.close(async () => {
     console.log('[API Gateway] HTTP server closed.');
+    await closeBuildQueues().catch((err) => {
+      console.error('[API Gateway] Error closing build queues:', err);
+    });
     process.exit(0);
   });
 };

@@ -1,51 +1,75 @@
+import { Worker } from 'bullmq';
 import { prisma, DeploymentStatus } from '@deployer/prisma';
-import { generatePresignedForms } from './s3.service.js';
+import { decryptEnvVars } from '@deployer/crypto';
+import {
+  BUILD_QUEUE,
+  COPY_QUEUE,
+  getRedisConnection,
+  type BuildJobData,
+  type CopyJobData,
+  type CopyJobResult,
+} from '@deployer/queue';
+import { generatePresignedForms, copyArtifactsInS3 } from './s3.service.js';
 import { runBuildInContainer } from './docker.service.js';
 
-export interface BuildJob {
-  projectId: string;
-  deploymentId: string;
-  repoUrl: string;
-  branch: string;
-  envVars: Record<string, string>;
-}
-
 const MAX_CONCURRENT_BUILDS = 3;
-const queue: BuildJob[] = [];
-let activeCount = 0;
+const MAX_CONCURRENT_COPIES = 2;
+
+let buildWorker: Worker<BuildJobData> | null = null;
+let copyWorker: Worker<CopyJobData, CopyJobResult> | null = null;
 
 /**
- * Pushes a build job into the concurrency queue and triggers processing.
+ * Starts the Redis-backed workers that consume build and artifact copy jobs.
  */
-export function enqueueBuild(job: BuildJob): void {
-  queue.push(job);
+export function startWorkers(): void {
+  if (buildWorker || copyWorker) return;
+
+  buildWorker = new Worker<BuildJobData>(BUILD_QUEUE, (job) => processJob(job.data), {
+    connection: getRedisConnection({ blocking: true }),
+    concurrency: MAX_CONCURRENT_BUILDS,
+  });
+
+  copyWorker = new Worker<CopyJobData, CopyJobResult>(COPY_QUEUE, (job) => processCopyJob(job.data), {
+    connection: getRedisConnection({ blocking: true }),
+    concurrency: MAX_CONCURRENT_COPIES,
+  });
+
+  buildWorker.on('active', (job) => {
+    console.log(`[Queue] Picked up deployment ${job.data.deploymentId}`);
+  });
+  buildWorker.on('failed', (job, err) => {
+    console.error(`[Queue] Unhandled exception in job ${job?.data.deploymentId}:`, err);
+  });
+  buildWorker.on('error', (err) => console.error('[Queue] Build worker error:', err.message));
+  copyWorker.on('error', (err) => console.error('[Queue] Copy worker error:', err.message));
+
   console.log(
-    `[Queue] Enqueued deployment ${job.deploymentId}. Pending: ${queue.length}, Active: ${activeCount}/${MAX_CONCURRENT_BUILDS}`
+    `[Queue] Workers listening on '${BUILD_QUEUE}' (concurrency ${MAX_CONCURRENT_BUILDS}) and '${COPY_QUEUE}' (concurrency ${MAX_CONCURRENT_COPIES})`
   );
-  tryProcessNext();
 }
 
 /**
- * Returns the current queue status for health/monitoring.
+ * Stops picking up new jobs and waits for active ones to finish.
  */
-export function getQueueStatus(): { pending: number; active: number } {
-  return { pending: queue.length, active: activeCount };
+export async function stopWorkers(): Promise<void> {
+  await Promise.all([buildWorker?.close(), copyWorker?.close()]);
+  buildWorker = null;
+  copyWorker = null;
 }
 
-function tryProcessNext(): void {
-  while (activeCount < MAX_CONCURRENT_BUILDS && queue.length > 0) {
-    const job = queue.shift()!;
-    activeCount++;
+async function processCopyJob(data: CopyJobData): Promise<CopyJobResult> {
+  const { sourcePrefix, destinationPrefix } = data;
+  console.log(`[Queue] CopyArtifacts requested from '${sourcePrefix}' to '${destinationPrefix}'`);
 
-    processJob(job)
-      .catch((err) => {
-        console.error(`[Queue] Unhandled exception in job ${job.deploymentId}:`, err);
-      })
-      .finally(() => {
-        activeCount--;
-        tryProcessNext();
-      });
+  if (!sourcePrefix || !destinationPrefix) {
+    return {
+      success: false,
+      copiedCount: 0,
+      errorMessage: 'Missing required fields: sourcePrefix and destinationPrefix are mandatory',
+    };
   }
+
+  return copyArtifactsInS3(sourcePrefix, destinationPrefix);
 }
 
 async function updateDeploymentStatus(
@@ -82,8 +106,9 @@ async function notifyLogService(
   }
 }
 
-async function processJob(job: BuildJob): Promise<void> {
-  const { projectId, deploymentId, repoUrl, branch, envVars } = job;
+async function processJob(job: BuildJobData): Promise<void> {
+  const { projectId, deploymentId, repoUrl, branch, envVarsEncrypted } = job;
+  const envVars = decryptEnvVars(envVarsEncrypted || {});
   const logServiceUrl = process.env.LOG_SERVICE_URL || 'http://log-service:9003';
 
   try {

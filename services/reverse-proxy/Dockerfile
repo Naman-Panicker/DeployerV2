@@ -5,7 +5,6 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.base.json ./
 COPY packages/ ./packages/
-COPY proto/ ./proto/
 COPY services/reverse-proxy/ ./services/reverse-proxy/
 
 RUN npm install

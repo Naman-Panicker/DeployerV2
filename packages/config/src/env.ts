@@ -40,8 +40,6 @@ export const env = {
 
   // Service Ports & Hosts
   API_GATEWAY_PORT: parseInt(process.env.API_GATEWAY_PORT || '9000', 10),
-  BUILD_SERVER_PORT: parseInt(process.env.BUILD_SERVER_PORT || '9001', 10),
-  BUILD_SERVER_HOST: process.env.BUILD_SERVER_HOST || 'localhost',
   LOG_SERVICE_PORT: parseInt(process.env.LOG_SERVICE_PORT || '9003', 10),
   LOG_SERVICE_URL: process.env.LOG_SERVICE_URL || 'http://localhost:9003',
   REVERSE_PROXY_PORT: parseInt(process.env.REVERSE_PROXY_PORT || '8080', 10),

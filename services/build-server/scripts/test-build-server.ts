@@ -1,15 +1,10 @@
-import { credentials } from '@grpc/grpc-js';
-import { BuildServiceClient } from '@deployer/proto';
 import { createScrubber } from '../src/services/scrubber.service.js';
-import { startServer as startBuildServer } from '../src/server.js';
 import { generatePresignedForms, copyArtifactsInS3 } from '../src/services/s3.service.js';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-
-const TEST_BUILD_PORT = 9011;
 
 async function runTests() {
   console.log('====================================================');
@@ -116,61 +111,6 @@ async function runTests() {
     copyResult.success === true || (copyResult.errorMessage && copyResult.errorMessage.includes('No artifacts found')),
     `copyArtifactsInS3 executed successfully (result: ${copyResult.success ? 'copied' : copyResult.errorMessage})`
   );
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // TEST 4: gRPC Server & CopyArtifacts RPC
-  // ─────────────────────────────────────────────────────────────────────────
-  console.log('\n--- Test 4: gRPC Server (TriggerBuild & CopyArtifacts RPCs) ---');
-  process.env.BUILD_SERVER_PORT = String(TEST_BUILD_PORT);
-  const server = await startBuildServer(TEST_BUILD_PORT);
-
-  const client = new BuildServiceClient(
-    `localhost:${TEST_BUILD_PORT}`,
-    credentials.createInsecure()
-  );
-
-  // 4a. Test CopyArtifacts RPC
-  const copyRpcRes = await new Promise<{ success: boolean; copiedCount: number }>((resolve, reject) => {
-    client.copyArtifacts(
-      {
-        sourcePrefix: '__history/test-proj/test-deploy/',
-        destinationPrefix: '__outputs/test-proj/',
-      },
-      (err, res) => {
-        if (err) return reject(err);
-        resolve(res);
-      }
-    );
-  });
-
-  assert(
-    copyRpcRes.success === true || (copyRpcRes as any).errorMessage?.includes('No artifacts found'),
-    `CopyArtifacts RPC executed properly (status: ${copyRpcRes.success ? 'success' : (copyRpcRes as any).errorMessage})`
-  );
-
-  // 4b. Test TriggerBuild validation
-  const triggerValidationRes = await new Promise<{ accepted: boolean; message: string }>((resolve, reject) => {
-    client.triggerBuild(
-      {
-        projectId: '',
-        deploymentId: '',
-        repoUrl: '',
-        branch: 'main',
-        envVars: {},
-      },
-      (err, res) => {
-        if (err) return reject(err);
-        resolve(res);
-      }
-    );
-  });
-
-  assert(
-    triggerValidationRes.accepted === false,
-    'TriggerBuild rejected invalid request with missing required parameters'
-  );
-
-  await new Promise<void>((resolve) => server.tryShutdown(() => resolve()));
 
   console.log('\n====================================================');
   console.log(`Results: ${passed} passed, ${failed} failed`);

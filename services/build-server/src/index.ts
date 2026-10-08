@@ -1,21 +1,37 @@
-import { env } from '@deployer/config';
-import { startServer } from './server.js';
+import { ensureBuildImage } from './services/docker.service.js';
+import { initializeBucket } from './services/s3.service.js';
+import { startWorkers, stopWorkers } from './services/queue.service.js';
 
 async function main() {
-  const port = env.BUILD_SERVER_PORT || 9001;
+  // Pre-pull / verify build container image on startup
+  await ensureBuildImage().catch((err) => {
+    console.warn('[Build Server] Warning: Could not verify Docker build image on startup:', err.message);
+  });
 
-  const server = await startServer(port);
+  // Verify/create S3 bucket on startup
+  await initializeBucket().catch((err) => {
+    console.warn('[Build Server] Warning: Could not initialize S3 bucket on startup:', err.message);
+  });
 
-  const shutdown = () => {
-    console.log('\n[Build Server] Shutting down gracefully...');
-    server.tryShutdown((err) => {
-      if (err) {
-        console.error('[Build Server] Graceful shutdown error, forcing close:', err);
-        server.forceShutdown();
-      }
-      console.log('[Build Server] Server stopped cleanly.');
-      process.exit(0);
-    });
+  startWorkers();
+
+  console.log(`========================================================`);
+  console.log(`[Build Server] Running. Consuming build and artifact copy jobs from Redis.`);
+  console.log(`========================================================`);
+
+  let isShuttingDown = false;
+  const shutdown = async () => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    console.log('\n[Build Server] Shutting down gracefully (waiting for active jobs)...');
+    try {
+      await stopWorkers();
+      console.log('[Build Server] Workers stopped cleanly.');
+    } catch (err) {
+      console.error('[Build Server] Error while stopping workers:', err);
+    }
+    process.exit(0);
   };
 
   process.on('SIGINT', shutdown);

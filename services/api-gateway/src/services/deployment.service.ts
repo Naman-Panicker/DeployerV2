@@ -2,8 +2,7 @@ import { prisma, DeploymentStatus, TriggerType, type Deployment } from '@deploye
 
 /**
  * Triggers a deployment for a user's project.
- * Creates a Deployment record with status QUEUED.
- * The gRPC call to the Build Server is stubbed until Phase 3.
+ * Creates a Deployment record with status QUEUED and pushes a build job to the Redis queue.
  */
 export async function triggerDeploy(
   userId: string,
@@ -32,29 +31,26 @@ export async function triggerDeploy(
     `[API Gateway] Deployment created (${deployment.id}) for project ${project.id} [${project.name}] - Status: QUEUED`
   );
 
-  // Decrypt env vars stored encrypted at rest
-  let envVars: Record<string, string> = {};
-  if (project.envVarsEncrypted && typeof project.envVarsEncrypted === 'object') {
-    const { decryptEnvVars } = await import('./encryption.service.js');
-    envVars = decryptEnvVars(project.envVarsEncrypted as Record<string, string>);
-  }
+  // Env vars stay encrypted in the job; the Build Server decrypts them
+  const envVarsEncrypted =
+    project.envVarsEncrypted && typeof project.envVarsEncrypted === 'object'
+      ? (project.envVarsEncrypted as Record<string, string>)
+      : {};
 
-  // Call Build Server via gRPC
+  // Queue build for the Build Server via Redis
   try {
-    const { triggerBuildRpc } = await import('../clients/build.client.js');
-    const buildResponse = await triggerBuildRpc({
+    const { enqueueBuild } = await import('../clients/build-queue.client.js');
+    await enqueueBuild({
       projectId: project.id,
       deploymentId: deployment.id,
       repoUrl: project.repoUrl,
       branch: project.branch || 'main',
-      envVars,
+      envVarsEncrypted,
     });
 
-    console.log(
-      `[API Gateway] Build Server response for deployment ${deployment.id}: accepted=${buildResponse.accepted}, message="${buildResponse.message}"`
-    );
+    console.log(`[API Gateway] Build job queued for deployment ${deployment.id}`);
   } catch (err) {
-    console.error(`[API Gateway] Failed to trigger build on Build Server:`, err);
+    console.error(`[API Gateway] Failed to queue build job:`, err);
   }
 
   return deployment;
@@ -111,7 +107,7 @@ export async function triggerRollback(
   );
 
   try {
-    const { copyArtifactsViaBuildServer } = await import('../clients/copy.client.js');
+    const { copyArtifactsViaBuildServer } = await import('../clients/build-queue.client.js');
     const copyResult = await copyArtifactsViaBuildServer(sourcePrefix, destinationPrefix);
 
     if (!copyResult.success) {
@@ -203,29 +199,26 @@ export async function triggerWebhookDeploy(
     `[API Gateway] Webhook triggered deployment ${deployment.id} for project ${project.id} (${project.name})`
   );
 
-  // Decrypt env vars stored encrypted at rest
-  let envVars: Record<string, string> = {};
-  if (project.envVarsEncrypted && typeof project.envVarsEncrypted === 'object') {
-    const { decryptEnvVars } = await import('./encryption.service.js');
-    envVars = decryptEnvVars(project.envVarsEncrypted as Record<string, string>);
-  }
+  // Env vars stay encrypted in the job; the Build Server decrypts them
+  const envVarsEncrypted =
+    project.envVarsEncrypted && typeof project.envVarsEncrypted === 'object'
+      ? (project.envVarsEncrypted as Record<string, string>)
+      : {};
 
-  // Call Build Server via gRPC
+  // Queue build for the Build Server via Redis
   try {
-    const { triggerBuildRpc } = await import('../clients/build.client.js');
-    const buildResponse = await triggerBuildRpc({
+    const { enqueueBuild } = await import('../clients/build-queue.client.js');
+    await enqueueBuild({
       projectId: project.id,
       deploymentId: deployment.id,
       repoUrl: project.repoUrl,
       branch: project.branch || 'main',
-      envVars,
+      envVarsEncrypted,
     });
 
-    console.log(
-      `[API Gateway] Webhook Build Server response for deployment ${deployment.id}: accepted=${buildResponse.accepted}, message="${buildResponse.message}"`
-    );
+    console.log(`[API Gateway] Webhook build job queued for deployment ${deployment.id}`);
   } catch (err) {
-    console.error(`[API Gateway] Failed to trigger build on Build Server for webhook:`, err);
+    console.error(`[API Gateway] Failed to queue build job for webhook:`, err);
   }
 
   return deployment;
