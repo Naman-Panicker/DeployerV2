@@ -1,5 +1,7 @@
 #!/bin/sh
 set -e
+# Fail when any command in a pipeline fails (e.g. `git clone ... | logger`), not just the last one
+set -o pipefail
 
 log() {
   node /scripts/logger.mjs system "$1"
