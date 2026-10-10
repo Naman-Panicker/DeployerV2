@@ -43,14 +43,33 @@ model Deployment {
   commitHash   String?          @map("commit_hash")
   triggerType  TriggerType      @default(MANUAL) @map("trigger_type")
   s3Prefix     String?          @map("s3_prefix")
+  failureType    FailureType?   @map("failure_type")
+  failureMessage String?        @map("failure_message") // user-facing reason, safe to show in the UI
   startedAt    DateTime?        @map("started_at")
   completedAt  DateTime?        @map("completed_at")
   createdAt    DateTime         @default(now()) @map("created_at")
 
   project      Project          @relation("ProjectDeployments", fields: [projectId], references: [id], onDelete: Cascade)
   logs         DeploymentLog[]
+  failures     DeploymentFailure[]
 
   @@map("deployments")
+}
+
+// Internal maintenance record for every failed deployment. Never exposed to users.
+model DeploymentFailure {
+  id           String      @id @default(uuid())
+  deploymentId String      @map("deployment_id")
+  type         FailureType
+  stage        String      // queue | setup | clone | detect | install | build | upload | finalize | shutdown | recovery
+  exitCode     Int?        @map("exit_code")
+  details      String      // error message, stack trace and last container log lines
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  deployment   Deployment  @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@index([type, createdAt])
+  @@map("deployment_failures")
 }
 
 model DeploymentLog {
@@ -73,6 +92,11 @@ enum DeploymentStatus {
   UPLOADING
   DEPLOYED
   FAILED
+}
+
+enum FailureType {
+  BUILD_ERROR  // caused by the repository: clone, install or build failed, timeout, out of memory
+  SYSTEM_ERROR // caused by our infrastructure: queue, Docker, S3, database, build server crash
 }
 
 enum TriggerType {
