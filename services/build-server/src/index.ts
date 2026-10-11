@@ -1,6 +1,7 @@
 import { ensureBuildImage } from './services/docker.service.js';
 import { initializeBucket } from './services/s3.service.js';
 import { startWorkers, stopWorkers } from './services/queue.service.js';
+import { recoverInterruptedBuilds } from './services/recovery.service.js';
 
 async function main() {
   // Pre-pull / verify build container image on startup
@@ -11,6 +12,11 @@ async function main() {
   // Verify/create S3 bucket on startup
   await initializeBucket().catch((err) => {
     console.warn('[Build Server] Warning: Could not initialize S3 bucket on startup:', err.message);
+  });
+
+  // Fail builds interrupted by a previous crash and remove their containers before taking new jobs
+  await recoverInterruptedBuilds(process.env.LOG_SERVICE_URL || 'http://log-service:9003').catch((err) => {
+    console.error('[Build Server] Warning: Could not recover interrupted builds:', err);
   });
 
   startWorkers();

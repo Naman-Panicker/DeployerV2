@@ -7,9 +7,17 @@ import { createScrubber } from './scrubber.service.js';
 import type { PresignedUploadForms } from './s3.service.js';
 
 export const BUILD_IMAGE = 'deployer-builder:latest';
-const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+export const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+export const BUILD_MEMORY_LIMIT_MB = 512;
+const MANAGED_LABEL = 'deployer.managed';
+const STAGE_MARKER = '::deployer-stage::';
+const LOG_TAIL_LINES = 50;
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
+
+// Running build containers by deployment ID, so shutdown can kill them
+const activeContainers = new Map<string, Docker.Container>();
+const abortedDeployments = new Set<string>();
 
 export interface BuildContainerOpts {
   projectId: string;
@@ -25,6 +33,75 @@ export interface BuildResult {
   success: boolean;
   exitCode: number;
   error?: string;
+  // Last stage the container reported (setup, clone, detect, install, build, upload)
+  stage: string;
+  timedOut: boolean;
+  oomKilled: boolean;
+  // Killed by the Build Server itself (shutdown), not by the build
+  aborted: boolean;
+  // Docker failed to create, start or wait on the container
+  infraError: boolean;
+  logTail: string[];
+}
+
+/**
+ * Splits a byte stream into lines, carrying partial lines across chunks.
+ */
+function createLineReader(onLine: (line: string) => void) {
+  let partial = '';
+  return {
+    push(chunk: Buffer) {
+      const lines = (partial + chunk.toString()).split('\n');
+      partial = lines.pop() ?? '';
+      for (const line of lines) {
+        if (line) onLine(line);
+      }
+    },
+    flush() {
+      if (partial) onLine(partial);
+      partial = '';
+    },
+  };
+}
+
+/**
+ * Kills every running build container (used on shutdown). Their builds are reported as aborted.
+ */
+export async function abortActiveBuilds(): Promise<void> {
+  await Promise.all(
+    Array.from(activeContainers.entries()).map(async ([deploymentId, container]) => {
+      abortedDeployments.add(deploymentId);
+      console.warn(`[Docker] Killing build container for deployment ${deploymentId} (server shutdown)`);
+      await container.kill().catch(() => {
+        // Container may have already terminated
+      });
+    })
+  );
+}
+
+/**
+ * Force-removes build containers left behind by a previous Build Server process.
+ * Returns the deployment IDs whose containers were removed.
+ */
+export async function removeOrphanedContainers(): Promise<Set<string>> {
+  const removed = new Set<string>();
+  const containers = await docker.listContainers({
+    all: true,
+    filters: { label: [`${MANAGED_LABEL}=true`] },
+  });
+
+  for (const info of containers) {
+    const deploymentId = info.Labels['deployer.deployment_id'];
+    try {
+      await docker.getContainer(info.Id).remove({ force: true });
+      console.warn(`[Docker] Removed orphaned build container ${info.Id.slice(0, 12)} (deployment ${deploymentId})`);
+      if (deploymentId) removed.add(deploymentId);
+    } catch (err) {
+      console.error(`[Docker] Failed to remove orphaned container ${info.Id.slice(0, 12)}:`, err);
+    }
+  }
+
+  return removed;
 }
 
 /**
@@ -101,6 +178,37 @@ export async function runBuildInContainer(opts: BuildContainerOpts): Promise<Bui
   let container: Docker.Container | null = null;
   let timeoutId: NodeJS.Timeout | null = null;
   let isTimedOut = false;
+  let stage = 'setup';
+  const logTail: string[] = [];
+
+  const handleLine = (line: string, isStderr: boolean) => {
+    if (line.startsWith(STAGE_MARKER)) {
+      stage = line.slice(STAGE_MARKER.length).trim() || stage;
+      return;
+    }
+    const cleanLine = scrubber.scrub(line);
+    logTail.push(cleanLine);
+    if (logTail.length > LOG_TAIL_LINES) logTail.shift();
+    if (isStderr) {
+      console.error(`[Container ${deploymentId}] ${cleanLine}`);
+    } else {
+      console.log(`[Container ${deploymentId}] ${cleanLine}`);
+    }
+  };
+  const stdoutReader = createLineReader((line) => handleLine(line, false));
+  const stderrReader = createLineReader((line) => handleLine(line, true));
+
+  const result = (fields: Partial<BuildResult>): BuildResult => ({
+    success: false,
+    exitCode: 1,
+    stage,
+    timedOut: isTimedOut,
+    oomKilled: false,
+    aborted: abortedDeployments.has(deploymentId),
+    infraError: false,
+    logTail: [...logTail],
+    ...fields,
+  });
 
   try {
     // 1. Create completely isolated container with resource limits
@@ -110,17 +218,18 @@ export async function runBuildInContainer(opts: BuildContainerOpts): Promise<Bui
       HostConfig: {
         // ZERO bind mounts — completely isolated container
         Binds: [],
-        Memory: 512 * 1024 * 1024,     // 512MB RAM limit
-        MemorySwap: 512 * 1024 * 1024, // No swap beyond memory
+        Memory: BUILD_MEMORY_LIMIT_MB * 1024 * 1024,     // 512MB RAM limit
+        MemorySwap: BUILD_MEMORY_LIMIT_MB * 1024 * 1024, // No swap beyond memory
         CpuPeriod: 100000,
         CpuQuota: 100000,              // 1 CPU core limit
         NetworkMode: networkMode,
       },
       Labels: {
         'deployer.deployment_id': deploymentId,
-        'deployer.managed': 'true',
+        [MANAGED_LABEL]: 'true',
       },
     });
+    activeContainers.set(deploymentId, container);
 
     // 2. Attach stdout and stderr for server monitoring
     const rawStream = await container.attach({
@@ -134,21 +243,8 @@ export async function runBuildInContainer(opts: BuildContainerOpts): Promise<Bui
 
     docker.modem.demuxStream(rawStream, stdoutStream, stderrStream);
 
-    stdoutStream.on('data', (chunk: Buffer) => {
-      const lines = chunk.toString().split('\n').filter(Boolean);
-      for (const line of lines) {
-        const cleanLine = scrubber.scrub(line);
-        console.log(`[Container ${deploymentId}] ${cleanLine}`);
-      }
-    });
-
-    stderrStream.on('data', (chunk: Buffer) => {
-      const lines = chunk.toString().split('\n').filter(Boolean);
-      for (const line of lines) {
-        const cleanLine = scrubber.scrub(line);
-        console.error(`[Container ${deploymentId}] ${cleanLine}`);
-      }
-    });
+    stdoutStream.on('data', (chunk: Buffer) => stdoutReader.push(chunk));
+    stderrStream.on('data', (chunk: Buffer) => stderrReader.push(chunk));
 
     // 3. Start container
     await container.start();
@@ -171,33 +267,40 @@ export async function runBuildInContainer(opts: BuildContainerOpts): Promise<Bui
 
     // 5. Wait for completion
     const waitPromise = container.wait();
-    const result = (await Promise.race([waitPromise, timeoutPromise])) as { StatusCode: number };
+    const waitResult = (await Promise.race([waitPromise, timeoutPromise])) as { StatusCode: number };
 
     if (timeoutId) clearTimeout(timeoutId);
 
     // Allow pending streams to flush
     await new Promise((resolve) => setTimeout(resolve, 300));
+    stdoutReader.flush();
+    stderrReader.flush();
 
-    const exitCode = result?.StatusCode ?? 1;
+    const exitCode = waitResult?.StatusCode ?? 1;
 
     if (exitCode !== 0) {
-      return {
-        success: false,
+      const state = await container.inspect().then((info) => info.State).catch(() => null);
+      return result({
         exitCode,
+        oomKilled: Boolean(state?.OOMKilled),
         error: `Container process exited with status code ${exitCode}`,
-      };
+      });
     }
 
-    return { success: true, exitCode: 0 };
+    return result({ success: true, exitCode: 0 });
   } catch (err) {
     if (timeoutId) clearTimeout(timeoutId);
+    stdoutReader.flush();
+    stderrReader.flush();
     const errorMsg = err instanceof Error ? err.message : String(err);
-    return {
-      success: false,
-      exitCode: 1,
+    return result({
       error: errorMsg,
-    };
+      infraError: !isTimedOut && !abortedDeployments.has(deploymentId),
+    });
   } finally {
+    activeContainers.delete(deploymentId);
+    abortedDeployments.delete(deploymentId);
+
     // 6. Cleanup: force remove container
     if (container) {
       try {

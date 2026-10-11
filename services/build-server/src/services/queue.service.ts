@@ -10,7 +10,8 @@ import {
   type CopyJobResult,
 } from '@deployer/queue';
 import { generatePresignedForms, copyArtifactsInS3 } from './s3.service.js';
-import { runBuildInContainer } from './docker.service.js';
+import { runBuildInContainer, abortActiveBuilds } from './docker.service.js';
+import { classifyContainerFailure, classifyServerError, failDeployment } from './failure.service.js';
 
 const MAX_CONCURRENT_BUILDS = 3;
 const MAX_CONCURRENT_COPIES = 2;
@@ -37,8 +38,12 @@ export function startWorkers(): void {
   buildWorker.on('active', (job) => {
     console.log(`[Queue] Picked up deployment ${job.data.deploymentId}`);
   });
+  // processJob records its own failures; this only fires if the deployment couldn't even be claimed
   buildWorker.on('failed', (job, err) => {
-    console.error(`[Queue] Unhandled exception in job ${job?.data.deploymentId}:`, err);
+    console.error(
+      `[Maintenance] Build job for deployment ${job?.data.deploymentId} could not be processed (left QUEUED):`,
+      err
+    );
   });
   buildWorker.on('error', (err) => console.error('[Queue] Build worker error:', err.message));
   copyWorker.on('error', (err) => console.error('[Queue] Copy worker error:', err.message));
@@ -49,10 +54,13 @@ export function startWorkers(): void {
 }
 
 /**
- * Stops picking up new jobs and waits for active ones to finish.
+ * Stops picking up new jobs, kills running build containers (recorded as SYSTEM_ERROR
+ * failures) and waits for their jobs to finish recording.
  */
 export async function stopWorkers(): Promise<void> {
-  await Promise.all([buildWorker?.close(), copyWorker?.close()]);
+  const closing = Promise.all([buildWorker?.close(), copyWorker?.close()]);
+  await abortActiveBuilds();
+  await closing;
   buildWorker = null;
   copyWorker = null;
 }
@@ -84,36 +92,25 @@ async function updateDeploymentStatus(
   console.log(`[Deployment ${deploymentId}] Status updated to ${status}`);
 }
 
-async function notifyLogService(
-  logServiceUrl: string,
-  deploymentId: string,
-  stream: 'stdout' | 'stderr' | 'system',
-  line: string
-): Promise<void> {
-  try {
-    await fetch(`${logServiceUrl}/api/logs/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        deploymentId,
-        stream,
-        line,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-  } catch {
-    // Ignore logging failures to avoid masking underlying build errors
-  }
-}
-
 async function processJob(job: BuildJobData): Promise<void> {
   const { projectId, deploymentId, repoUrl, branch, envVarsEncrypted } = job;
-  const envVars = decryptEnvVars(envVarsEncrypted || {});
   const logServiceUrl = process.env.LOG_SERVICE_URL || 'http://log-service:9003';
 
+  // 1. Claim the deployment: only a QUEUED deployment may start building. This makes the job
+  // idempotent when BullMQ re-delivers it (stalled job) or the gateway already marked it FAILED.
+  const claimed = await prisma.deployment.updateMany({
+    where: { id: deploymentId, status: DeploymentStatus.QUEUED },
+    data: { status: DeploymentStatus.BUILDING, startedAt: new Date() },
+  });
+  if (claimed.count === 0) {
+    console.warn(`[Queue] Skipping job for deployment ${deploymentId}: deployment is no longer QUEUED`);
+    return;
+  }
+  console.log(`[Deployment ${deploymentId}] Status updated to ${DeploymentStatus.BUILDING}`);
+
+  let stage = 'setup';
   try {
-    // 1. Transition directly to BUILDING
-    await updateDeploymentStatus(deploymentId, DeploymentStatus.BUILDING, { startedAt: new Date() });
+    const envVars = decryptEnvVars(envVarsEncrypted || {});
 
     // 2. Generate presigned S3 POST forms (outputs + history prefixes)
     console.log(`[Queue] Generating presigned S3 POST forms for deployment ${deploymentId}...`);
@@ -132,10 +129,12 @@ async function processJob(job: BuildJobData): Promise<void> {
     });
 
     if (!buildResult.success) {
-      throw new Error(`Build container failed: ${buildResult.error || 'Non-zero exit code'}`);
+      await failDeployment(deploymentId, logServiceUrl, classifyContainerFailure(buildResult));
+      return;
     }
 
     // 4. Mark deployment as DEPLOYED
+    stage = 'finalize';
     const s3Prefix = presignedForms.outputs.prefix;
     await updateDeploymentStatus(deploymentId, DeploymentStatus.DEPLOYED, {
       s3Prefix,
@@ -150,15 +149,6 @@ async function processJob(job: BuildJobData): Promise<void> {
 
     console.log(`[Queue] Deployment ${deploymentId} successfully completed and deployed!`);
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    console.error(`[Queue] Build failed for deployment ${deploymentId}: ${errorMsg}`);
-
-    // Notify log service in case container died prematurely
-    await notifyLogService(logServiceUrl, deploymentId, 'stderr', `❌ Build failed: ${errorMsg}`);
-    await notifyLogService(logServiceUrl, deploymentId, 'system', 'BUILD_COMPLETE');
-
-    await updateDeploymentStatus(deploymentId, DeploymentStatus.FAILED, {
-      completedAt: new Date(),
-    });
+    await failDeployment(deploymentId, logServiceUrl, classifyServerError(stage, err));
   }
 }

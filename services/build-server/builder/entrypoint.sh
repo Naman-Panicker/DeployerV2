@@ -7,7 +7,11 @@ log() {
   node /scripts/logger.mjs system "$1"
 }
 
-trap 'EXIT_CODE=$?; if [ $EXIT_CODE -ne 0 ]; then node /scripts/logger.mjs system "BUILD_FAILED: Container process exited with code $EXIT_CODE"; fi; exit $EXIT_CODE' EXIT
+# Stage markers go to container stdout only (not to the user log). The Build Server reads the
+# last marker to tell repository failures (clone/install/build) from infrastructure ones.
+stage() {
+  echo "::deployer-stage::$1"
+}
 
 log "========================================================"
 log "Deployer Build Container started for deployment: $DEPLOYMENT_ID"
@@ -21,12 +25,14 @@ fi
 BRANCH="${BRANCH:-main}"
 
 # 1. Clone repository directly inside container
+stage clone
 log "Cloning repository: $REPO_URL (branch: $BRANCH)..."
 git clone --branch "$BRANCH" --depth 1 --single-branch "$REPO_URL" /app 2>&1 | node /scripts/logger.mjs stdout
 
 cd /app
 
 # 2. Framework & build detection
+stage detect
 log "Detecting project configuration..."
 DETECT_JSON=$(node /scripts/detect.mjs /app)
 log "Detection result: $DETECT_JSON"
@@ -38,9 +44,11 @@ FRAMEWORK=$(node -e 'console.log(JSON.parse(process.argv[1]).framework)' "$DETEC
 
 # 3. Install dependencies & execute build
 if [ "$HAS_BUILD_SCRIPT" = "true" ]; then
+  stage install
   log "Installing project dependencies with npm install..."
   npm install 2>&1 | node /scripts/logger.mjs stdout
 
+  stage build
   log "Executing build command: $BUILD_CMD ($FRAMEWORK)..."
   $BUILD_CMD 2>&1 | node /scripts/logger.mjs stdout
 else
@@ -48,6 +56,7 @@ else
 fi
 
 # 4. Resolve output artifact directory
+stage upload
 if [ -d "/app/$OUTPUT_SUBDIR" ] && [ "$OUTPUT_SUBDIR" != "." ]; then
   FINAL_OUTPUT_DIR="/app/$OUTPUT_SUBDIR"
 elif [ -d "/app/dist" ]; then
@@ -74,6 +83,4 @@ log "Artifact upload complete."
 # 6. Signal completion to log-service
 log "BUILD_COMPLETE"
 
-# Clear trap before successful exit
-trap - EXIT
 exit 0
