@@ -9,6 +9,7 @@ import {
 } from '@deployer/queue';
 
 const COPY_TIMEOUT_MS = 60_000;
+const ENQUEUE_ACK_TIMEOUT_MS = 5_000;
 
 let buildQueue: Queue<BuildJobData> | null = null;
 let copyQueue: Queue<CopyJobData, CopyJobResult> | null = null;
@@ -51,16 +52,34 @@ export function setCopyArtifactsOverride(
 }
 
 /**
- * Queues a build for the Build Server. The deployment ID doubles as the job ID,
- * so a deployment can't be queued twice while its job is still pending.
+ * Queues a build for the Build Server and waits for Redis to acknowledge it.
+ * queue.add() only resolves once Redis has stored the job, so a resolved add is the ack;
+ * no ack within ENQUEUE_ACK_TIMEOUT_MS is treated as a failure.
+ * The deployment ID doubles as the job ID, so a deployment can't be queued twice while pending.
  */
 export async function enqueueBuild(data: BuildJobData): Promise<void> {
-  await getBuildQueue().add('build', data, {
+  const add = getBuildQueue().add('build', data, {
     jobId: data.deploymentId,
     // Job data holds encrypted env vars; don't keep it around after the build finishes
     removeOnComplete: true,
     removeOnFail: true,
   });
+  // If the timeout wins, a late rejection must not become an unhandled rejection
+  add.catch(() => {});
+
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Redis did not acknowledge build job within ${ENQUEUE_ACK_TIMEOUT_MS}ms`)),
+      ENQUEUE_ACK_TIMEOUT_MS
+    );
+  });
+
+  try {
+    await Promise.race([add, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

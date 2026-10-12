@@ -16,7 +16,7 @@ import {
   getProjectEnvVars,
 } from '../services/project.service.js';
 import { triggerDeploy, triggerRollback } from '../services/deployment.service.js';
-import { prisma } from '@deployer/prisma';
+import { prisma, DeploymentStatus } from '@deployer/prisma';
 import { env } from '@deployer/config';
 
 
@@ -178,6 +178,21 @@ export async function deployProjectHandler(
 
     const deployment = await triggerDeploy(userId, id);
 
+    // Build job was never acknowledged by the queue
+    if (deployment.status === DeploymentStatus.FAILED) {
+      res.status(503).json({
+        error: deployment.failureMessage,
+        deployment: {
+          id: deployment.id,
+          projectId: deployment.projectId,
+          status: deployment.status,
+          failureType: deployment.failureType,
+          failureMessage: deployment.failureMessage,
+        },
+      });
+      return;
+    }
+
     res.status(202).json({
       message: 'Deployment triggered successfully',
       deployment: {
@@ -247,6 +262,8 @@ export async function listDeploymentsHandler(
         status: true,
         commitHash: true,
         triggerType: true,
+        failureType: true,
+        failureMessage: true,
         startedAt: true,
         completedAt: true,
         createdAt: true,

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { env } from '@deployer/config';
+import { DeploymentStatus } from '@deployer/prisma';
 import { githubWebhookSchema } from '../utils/validation.js';
 import { triggerWebhookDeploy } from '../services/deployment.service.js';
 
@@ -70,6 +71,20 @@ export async function githubWebhookHandler(
         message: 'Webhook received, but no linked project matched the repository URL',
         repoUrl,
         branch,
+      });
+      return;
+    }
+
+    // Build job was never acknowledged by the queue; a non-2xx lets GitHub show it as failed for redelivery
+    if (deployment.status === DeploymentStatus.FAILED) {
+      res.status(503).json({
+        error: deployment.failureMessage,
+        deployment: {
+          id: deployment.id,
+          projectId: deployment.projectId,
+          status: deployment.status,
+          failureType: deployment.failureType,
+        },
       });
       return;
     }

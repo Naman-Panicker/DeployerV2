@@ -1,8 +1,41 @@
-import { prisma, DeploymentStatus, TriggerType, type Deployment } from '@deployer/prisma';
+import {
+  prisma,
+  DeploymentStatus,
+  TriggerType,
+  FailureType,
+  recordDeploymentFailure,
+  type Deployment,
+} from '@deployer/prisma';
+
+/**
+ * Fails a deployment whose build job Redis never acknowledged. The user gets a visible
+ * SYSTEM_ERROR in their log (written directly, since the Redis log path is likely down too).
+ */
+async function failUnqueuedDeployment(deployment: Deployment, err: unknown): Promise<Deployment> {
+  const { userMessage } = await recordDeploymentFailure({
+    deploymentId: deployment.id,
+    type: FailureType.SYSTEM_ERROR,
+    stage: 'queue',
+    details: err instanceof Error ? err.stack || err.message : String(err),
+  });
+
+  await prisma.deploymentLog
+    .create({ data: { deploymentId: deployment.id, stream: 'stderr', line: `⚠️ ${userMessage}` } })
+    .catch((logErr) => console.error(`[Maintenance] Could not write failure log line for ${deployment.id}:`, logErr));
+
+  return {
+    ...deployment,
+    status: DeploymentStatus.FAILED,
+    failureType: FailureType.SYSTEM_ERROR,
+    failureMessage: userMessage,
+    completedAt: new Date(),
+  };
+}
 
 /**
  * Triggers a deployment for a user's project.
  * Creates a Deployment record with status QUEUED and pushes a build job to the Redis queue.
+ * If Redis doesn't acknowledge the job, the returned deployment is already FAILED.
  */
 export async function triggerDeploy(
   userId: string,
@@ -51,6 +84,7 @@ export async function triggerDeploy(
     console.log(`[API Gateway] Build job queued for deployment ${deployment.id}`);
   } catch (err) {
     console.error(`[API Gateway] Failed to queue build job:`, err);
+    return failUnqueuedDeployment(deployment, err);
   }
 
   return deployment;
@@ -219,6 +253,7 @@ export async function triggerWebhookDeploy(
     console.log(`[API Gateway] Webhook build job queued for deployment ${deployment.id}`);
   } catch (err) {
     console.error(`[API Gateway] Failed to queue build job for webhook:`, err);
+    return failUnqueuedDeployment(deployment, err);
   }
 
   return deployment;
