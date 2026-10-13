@@ -12,6 +12,7 @@ import {
 import { generatePresignedForms, copyArtifactsInS3 } from './s3.service.js';
 import { runBuildInContainer, abortActiveBuilds } from './docker.service.js';
 import { classifyContainerFailure, classifyServerError, failDeployment } from './failure.service.js';
+import { publishLog } from './log-publisher.service.js';
 
 const MAX_CONCURRENT_BUILDS = 3;
 const MAX_CONCURRENT_COPIES = 2;
@@ -94,7 +95,6 @@ async function updateDeploymentStatus(
 
 async function processJob(job: BuildJobData): Promise<void> {
   const { projectId, deploymentId, repoUrl, branch, envVarsEncrypted } = job;
-  const logServiceUrl = process.env.LOG_SERVICE_URL || 'http://log-service:9003';
 
   // 1. Claim the deployment: only a QUEUED deployment may start building. This makes the job
   // idempotent when BullMQ re-delivers it (stalled job) or the gateway already marked it FAILED.
@@ -125,11 +125,14 @@ async function processJob(job: BuildJobData): Promise<void> {
       branch,
       envVars,
       presignedForms,
-      logServiceUrl,
+      // Scrubbed container output goes to the user's live log via Redis
+      onLog: (stream, line) => {
+        void publishLog(deploymentId, stream, line);
+      },
     });
 
     if (!buildResult.success) {
-      await failDeployment(deploymentId, logServiceUrl, classifyContainerFailure(buildResult));
+      await failDeployment(deploymentId, classifyContainerFailure(buildResult));
       return;
     }
 
@@ -147,8 +150,9 @@ async function processJob(job: BuildJobData): Promise<void> {
       data: { currentDeploymentId: deploymentId },
     });
 
+    await publishLog(deploymentId, 'system', 'BUILD_COMPLETE');
     console.log(`[Queue] Deployment ${deploymentId} successfully completed and deployed!`);
   } catch (err) {
-    await failDeployment(deploymentId, logServiceUrl, classifyServerError(stage, err));
+    await failDeployment(deploymentId, classifyServerError(stage, err));
   }
 }

@@ -1,10 +1,12 @@
 #!/bin/sh
 set -e
-# Fail when any command in a pipeline fails (e.g. `git clone ... | logger`), not just the last one
+# Fail when any command in a pipeline fails, not just the last one
 set -o pipefail
 
+# Status messages for the user's build log. The container only prints; the Build Server reads
+# its output, scrubs secrets and publishes it (the container has no route to internal services).
 log() {
-  node /scripts/logger.mjs system "$1"
+  echo "[system] $1"
 }
 
 # Stage markers go to container stdout only (not to the user log). The Build Server reads the
@@ -27,7 +29,7 @@ BRANCH="${BRANCH:-main}"
 # 1. Clone repository directly inside container
 stage clone
 log "Cloning repository: $REPO_URL (branch: $BRANCH)..."
-git clone --branch "$BRANCH" --depth 1 --single-branch "$REPO_URL" /app 2>&1 | node /scripts/logger.mjs stdout
+git clone --branch "$BRANCH" --depth 1 --single-branch "$REPO_URL" /app 2>&1
 
 cd /app
 
@@ -46,11 +48,11 @@ FRAMEWORK=$(node -e 'console.log(JSON.parse(process.argv[1]).framework)' "$DETEC
 if [ "$HAS_BUILD_SCRIPT" = "true" ]; then
   stage install
   log "Installing project dependencies with npm install..."
-  npm install 2>&1 | node /scripts/logger.mjs stdout
+  npm install 2>&1
 
   stage build
   log "Executing build command: $BUILD_CMD ($FRAMEWORK)..."
-  $BUILD_CMD 2>&1 | node /scripts/logger.mjs stdout
+  $BUILD_CMD 2>&1
 else
   log "No build script found. Project will be served as static assets."
 fi
@@ -80,7 +82,7 @@ node /scripts/upload.mjs
 
 log "Artifact upload complete."
 
-# 6. Signal completion to log-service
+# 6. Signal completion
 log "BUILD_COMPLETE"
 
 exit 0

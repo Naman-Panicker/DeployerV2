@@ -7,7 +7,6 @@ RUN apk add --no-cache git curl ca-certificates bash
 WORKDIR /scripts
 RUN npm init -y && npm install mime-types@^2.1.35
 
-COPY logger.mjs /scripts/logger.mjs
 COPY detect.mjs /scripts/detect.mjs
 COPY upload.mjs /scripts/upload.mjs
 COPY entrypoint.sh /scripts/entrypoint.sh

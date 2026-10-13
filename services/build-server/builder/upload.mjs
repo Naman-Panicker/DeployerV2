@@ -4,26 +4,13 @@ import mime from 'mime-types';
 
 const formsJson = process.env.S3_UPLOAD_FORMS;
 const outputDir = process.env.OUTPUT_DIR || '/app';
-const logServiceUrl = process.env.LOG_SERVICE_URL;
-const deploymentId = process.env.DEPLOYMENT_ID;
 
-async function log(stream, line) {
-  console.log(`[Upload Script] ${line}`);
-  if (logServiceUrl && deploymentId) {
-    try {
-      await fetch(`${logServiceUrl}/api/logs/ingest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          deploymentId,
-          stream,
-          line,
-          timestamp: new Date().toISOString(),
-        }),
-      });
-    } catch {
-      // Ignore network errors in log shipping
-    }
+// Printed only; the Build Server forwards container output to the user's build log
+function log(stream, line) {
+  if (stream === 'stderr') {
+    console.error(`[Upload Script] ${line}`);
+  } else {
+    console.log(`[Upload Script] ${line}`);
   }
 }
 

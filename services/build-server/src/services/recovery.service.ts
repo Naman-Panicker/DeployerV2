@@ -9,7 +9,7 @@ import { failDeployment } from './failure.service.js';
  *
  * Assumes a single Build Server per machine: at startup, nothing else can be building.
  */
-export async function recoverInterruptedBuilds(logServiceUrl: string): Promise<void> {
+export async function recoverInterruptedBuilds(): Promise<void> {
   let removedContainers = new Set<string>();
   try {
     removedContainers = await removeOrphanedContainers();
@@ -32,7 +32,7 @@ export async function recoverInterruptedBuilds(logServiceUrl: string): Promise<v
   );
 
   for (const { id } of interrupted) {
-    await failDeployment(id, logServiceUrl, {
+    await failDeployment(id, {
       type: FailureType.SYSTEM_ERROR,
       stage: 'recovery',
       details: removedContainers.has(id)

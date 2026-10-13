@@ -1,5 +1,6 @@
 import { prisma, FailureType, recordDeploymentFailure } from '@deployer/prisma';
 import { BUILD_MEMORY_LIMIT_MB, BUILD_TIMEOUT_MS, type BuildResult } from './docker.service.js';
+import { publishLog } from './log-publisher.service.js';
 
 export interface ClassifiedFailure {
   type: FailureType;
@@ -76,49 +77,21 @@ export function classifyServerError(stage: string, err: unknown): ClassifiedFail
   };
 }
 
-export async function notifyLogService(
-  logServiceUrl: string,
-  deploymentId: string,
-  stream: 'stdout' | 'stderr' | 'system',
-  line: string
-): Promise<boolean> {
-  try {
-    const res = await fetch(`${logServiceUrl}/api/logs/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        deploymentId,
-        stream,
-        line,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-    return res.ok;
-  } catch {
-    // Ignore logging failures to avoid masking underlying build errors
-    return false;
-  }
-}
-
 /**
- * Records the failure, then makes sure the user sees it in their build log. Goes through the
- * Log Service so it lands after buffered build lines, falling back to a direct database
- * write when the log path (Log Service or Redis) is down.
+ * Records the failure, then makes sure the user sees it in their build log. Publishes to the
+ * log channel so it lands after the build's own lines, falling back to a direct database
+ * write when Redis is down.
  */
-export async function failDeployment(
-  deploymentId: string,
-  logServiceUrl: string,
-  failure: ClassifiedFailure
-): Promise<void> {
+export async function failDeployment(deploymentId: string, failure: ClassifiedFailure): Promise<void> {
   const { userMessage } = await recordDeploymentFailure({ deploymentId, ...failure });
   const line = failure.type === FailureType.BUILD_ERROR ? `❌ Build failed: ${userMessage}` : `⚠️ ${userMessage}`;
 
-  const delivered = await notifyLogService(logServiceUrl, deploymentId, 'stderr', line);
+  const delivered = await publishLog(deploymentId, 'stderr', line);
   if (!delivered) {
     await prisma.deploymentLog
       .create({ data: { deploymentId, stream: 'stderr', line } })
       .catch((err) => console.error(`[Maintenance] Could not write failure log line for ${deploymentId}:`, err));
   }
 
-  await notifyLogService(logServiceUrl, deploymentId, 'system', 'BUILD_COMPLETE');
+  await publishLog(deploymentId, 'system', 'BUILD_COMPLETE');
 }

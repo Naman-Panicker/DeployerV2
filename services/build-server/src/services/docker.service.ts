@@ -9,8 +9,12 @@ import type { PresignedUploadForms } from './s3.service.js';
 export const BUILD_IMAGE = 'deployer-builder:latest';
 export const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 export const BUILD_MEMORY_LIMIT_MB = 512;
+// Dedicated network for build containers: internet access only. No Deployer service
+// (Redis, Postgres, Log Service...) is attached to it, so builds have no route to them.
+export const BUILD_NETWORK = process.env.BUILD_NETWORK || 'deployer-build-net';
 const MANAGED_LABEL = 'deployer.managed';
 const STAGE_MARKER = '::deployer-stage::';
+const SYSTEM_PREFIX = '[system] ';
 const LOG_TAIL_LINES = 50;
 
 const docker = new Docker({ socketPath: '/var/run/docker.sock' });
@@ -26,7 +30,8 @@ export interface BuildContainerOpts {
   branch: string;
   envVars: Record<string, string>;
   presignedForms: PresignedUploadForms;
-  logServiceUrl: string;
+  // Receives every scrubbed container log line
+  onLog: (stream: 'stdout' | 'stderr' | 'system', line: string) => void;
 }
 
 export interface BuildResult {
@@ -104,6 +109,40 @@ export async function removeOrphanedContainers(): Promise<Set<string>> {
   return removed;
 }
 
+let buildNetworkReady = false;
+
+/**
+ * Creates the isolated build network if it doesn't exist. Containers on it get internet
+ * access but can't reach each other (inter-container communication disabled) or any
+ * Deployer service, since none are attached to it.
+ */
+export async function ensureBuildNetwork(): Promise<void> {
+  if (buildNetworkReady) return;
+
+  try {
+    const info = await docker.getNetwork(BUILD_NETWORK).inspect();
+    if (info.Options?.['com.docker.network.bridge.enable_icc'] !== 'false') {
+      console.warn(
+        `[Docker] Build network '${BUILD_NETWORK}' already exists but allows container-to-container traffic. Remove it to let the Build Server recreate it.`
+      );
+    }
+  } catch (err: any) {
+    if (err.statusCode !== 404) {
+      throw err;
+    }
+    console.log(`[Docker] Build network '${BUILD_NETWORK}' not found. Creating...`);
+    await docker.createNetwork({
+      Name: BUILD_NETWORK,
+      Driver: 'bridge',
+      Options: { 'com.docker.network.bridge.enable_icc': 'false' },
+      Labels: { 'deployer.build-network': 'true' },
+    });
+    console.log(`[Docker] Created build network '${BUILD_NETWORK}'.`);
+  }
+
+  buildNetworkReady = true;
+}
+
 /**
  * Verifies if deployer-builder:latest exists locally.
  * If missing, builds it from services/build-server/builder/Dockerfile.
@@ -149,9 +188,9 @@ export async function ensureBuildImage(): Promise<void> {
  * The container handles cloning, detection, building, and S3 uploading internally.
  */
 export async function runBuildInContainer(opts: BuildContainerOpts): Promise<BuildResult> {
-  const { projectId, deploymentId, repoUrl, branch, envVars, presignedForms, logServiceUrl } = opts;
+  const { projectId, deploymentId, repoUrl, branch, envVars, presignedForms, onLog } = opts;
 
-  // Initialize secret scrubber for safe console output
+  // Initialize secret scrubber for console output and published build logs
   const scrubber = createScrubber(envVars);
 
   // Build container environment variables
@@ -160,20 +199,11 @@ export async function runBuildInContainer(opts: BuildContainerOpts): Promise<Bui
     DEPLOYMENT_ID: deploymentId,
     REPO_URL: repoUrl,
     BRANCH: branch || 'main',
-    LOG_SERVICE_URL: logServiceUrl,
     S3_UPLOAD_FORMS: JSON.stringify(presignedForms),
     ...envVars,
   };
 
   const envArray = Object.entries(containerEnv).map(([key, val]) => `${key}=${val}`);
-
-  // Resolve network mode (join deployer network to reach log-service, or fallback to bridge)
-  let networkMode = process.env.DOCKER_NETWORK || 'deployer-network';
-  try {
-    await docker.getNetwork(networkMode).inspect();
-  } catch {
-    networkMode = 'bridge';
-  }
 
   let container: Docker.Container | null = null;
   let timeoutId: NodeJS.Timeout | null = null;
@@ -194,6 +224,15 @@ export async function runBuildInContainer(opts: BuildContainerOpts): Promise<Bui
     } else {
       console.log(`[Container ${deploymentId}] ${cleanLine}`);
     }
+
+    // Entrypoint status messages are prefixed "[system] "; everything else is build output
+    if (cleanLine.startsWith(SYSTEM_PREFIX)) {
+      const message = cleanLine.slice(SYSTEM_PREFIX.length);
+      // The Build Server sends BUILD_COMPLETE itself once the container has exited
+      if (message !== 'BUILD_COMPLETE') onLog('system', message);
+    } else {
+      onLog(isStderr ? 'stderr' : 'stdout', cleanLine);
+    }
   };
   const stdoutReader = createLineReader((line) => handleLine(line, false));
   const stderrReader = createLineReader((line) => handleLine(line, true));
@@ -211,6 +250,9 @@ export async function runBuildInContainer(opts: BuildContainerOpts): Promise<Bui
   });
 
   try {
+    // Fail closed: never fall back to a network that can reach internal services
+    await ensureBuildNetwork();
+
     // 1. Create completely isolated container with resource limits
     container = await docker.createContainer({
       Image: BUILD_IMAGE,
@@ -222,7 +264,7 @@ export async function runBuildInContainer(opts: BuildContainerOpts): Promise<Bui
         MemorySwap: BUILD_MEMORY_LIMIT_MB * 1024 * 1024, // No swap beyond memory
         CpuPeriod: 100000,
         CpuQuota: 100000,              // 1 CPU core limit
-        NetworkMode: networkMode,
+        NetworkMode: BUILD_NETWORK,
       },
       Labels: {
         'deployer.deployment_id': deploymentId,
