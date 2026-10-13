@@ -66,6 +66,20 @@ export async function stopWorkers(): Promise<void> {
   copyWorker = null;
 }
 
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const HISTORY_PREFIX_RE = new RegExp(`^__history/(${UUID})/${UUID}/$`);
+const OUTPUTS_PREFIX_RE = new RegExp(`^__outputs/(${UUID})/$`);
+
+/**
+ * Copy jobs are only ever rollbacks: one project's history snapshot onto that same project's
+ * live prefix. Anything else (e.g. a forged job writing over another project's site) is rejected.
+ */
+export function isRollbackCopy(sourcePrefix: string, destinationPrefix: string): boolean {
+  const source = HISTORY_PREFIX_RE.exec(sourcePrefix);
+  const destination = OUTPUTS_PREFIX_RE.exec(destinationPrefix);
+  return Boolean(source && destination && source[1] === destination[1]);
+}
+
 async function processCopyJob(data: CopyJobData): Promise<CopyJobResult> {
   const { sourcePrefix, destinationPrefix } = data;
   console.log(`[Queue] CopyArtifacts requested from '${sourcePrefix}' to '${destinationPrefix}'`);
@@ -75,6 +89,17 @@ async function processCopyJob(data: CopyJobData): Promise<CopyJobResult> {
       success: false,
       copiedCount: 0,
       errorMessage: 'Missing required fields: sourcePrefix and destinationPrefix are mandatory',
+    };
+  }
+
+  if (!isRollbackCopy(sourcePrefix, destinationPrefix)) {
+    console.error(
+      `[Maintenance] REJECTED_COPY_JOB source='${sourcePrefix}' destination='${destinationPrefix}': not a same-project rollback copy`
+    );
+    return {
+      success: false,
+      copiedCount: 0,
+      errorMessage: 'Rejected copy job: only same-project rollback copies (__history -> __outputs) are allowed',
     };
   }
 
